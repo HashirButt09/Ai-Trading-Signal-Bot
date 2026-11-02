@@ -33,6 +33,19 @@ interface Props {
 }
 
 const ts = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
+
+/** decimals Binance uses for this pair, read from the prices themselves (2 to 8) */
+export function pricePrecision(candles: Candle[]): number {
+  let d = 2;
+  for (const c of candles.slice(-100)) {
+    for (const v of [c.o, c.h, c.l, c.c]) {
+      const s = v.toFixed(10).replace(/0+$/, '');
+      const k = s.includes('.') ? s.length - s.indexOf('.') - 1 : 0;
+      if (k > d) d = k;
+    }
+  }
+  return Math.min(8, d);
+}
 type AnySeries = ISeriesApi<'Line'> | ISeriesApi<'Histogram'>;
 interface Plot {
   ind: ActiveIndicator;
@@ -220,7 +233,14 @@ export function Chart({ symbol, interval, candles, entries, selected, indicators
     const n = candles.length;
     const timeAt = (j: number) => ts(j < n ? candles[j].t : candles[n - 1].t + (j - n + 1) * step);
 
-    if (full) cs.current.setData(candles.map(toBar));
+    if (full) {
+      // show as many decimals as Binance quotes for this pair (0.08754 must not be rounded to 0.09)
+      const precision = pricePrecision(candles);
+      const priceFormat = { type: 'price' as const, precision, minMove: Number((10 ** -precision).toFixed(precision)) };
+      cs.current.applyOptions({ priceFormat });
+      for (const p of plots.current) if (DEF_BY_TYPE[p.ind.type].pane === 'overlay') for (const s of Object.values(p.series)) s.applyOptions({ priceFormat });
+      cs.current.setData(candles.map(toBar));
+    }
     else cs.current.update(toBar(candles[n - 1]));
 
     for (const p of plots.current) {
