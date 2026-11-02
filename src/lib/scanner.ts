@@ -269,14 +269,25 @@ export class Scanner {
     const queue = [...watchlist];
     const worker = async () => {
       for (let s = queue.shift(); s; s = queue.shift()) {
-        const [l, h] = await Promise.all([fetchKlines(s, ltf, 500), fetchKlines(s, htf, 300)]);
-        this.ltf.set(s, l);
-        this.htf.set(s, h);
-        this.refreshState(s);
+        try {
+          const [l, h] = await Promise.all([fetchKlines(s, ltf, 500), fetchKlines(s, htf, 300)]);
+          this.ltf.set(s, l);
+          this.htf.set(s, h);
+          this.refreshState(s);
+        } catch {
+          /* continue with remaining pairs if one pair has a temporary network issue */
+        }
       }
     };
-    await Promise.all([worker(), worker(), worker()]);
+    await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);
     this.catchUp();
+    // Scan all loaded pairs immediately for any active setups formed on the latest closed candle
+    for (const sym of watchlist) {
+      const L = this.ltf.get(sym);
+      if (L?.length) {
+        this.onLtfClose(sym, L[L.length - 1]);
+      }
+    }
     this.emit();
   }
 
@@ -572,8 +583,11 @@ export class Scanner {
   series(symbol: string, interval: string): Candle[] {
     const base = (interval === this.settings.ltf ? this.ltf : interval === this.settings.htf ? this.htf : null)?.get(symbol) ?? [];
     const f = this.forming.get(`${symbol}|${interval}`);
-    if (f && (!base.length || f.t > base[base.length - 1].t)) return [...base, f];
-    return base;
+    if (f && (!base.length || f.t > base[base.length - 1].t)) return [...base, { ...f }];
+    if (base.length) {
+      return [...base.slice(0, -1), { ...base[base.length - 1] }];
+    }
+    return [];
   }
 
   resolvedCount() {

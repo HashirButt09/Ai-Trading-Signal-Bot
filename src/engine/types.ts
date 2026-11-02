@@ -84,6 +84,13 @@ export interface Settings {
   editedAt: number; // when settings were last changed on this device (newer side wins when syncing)
 }
 
+export const DEFAULT_WATCHLIST = [
+  'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'POLUSDT', 'LINKUSDT',
+  'ADAUSDT', 'AVAXUSDT', 'SUIUSDT', 'NEARUSDT', 'APTUSDT', 'PEPEUSDT', 'SHIBUSDT', 'ARBUSDT',
+  'OPUSDT', 'TIAUSDT', 'INJUSDT', 'RENDERUSDT', 'FETUSDT', 'FTMUSDT', 'WIFUSDT', 'AAVEUSDT',
+  'UNIUSDT', 'LTCUSDT', 'BCHUSDT', 'DOTUSDT', 'FILUSDT', 'ATOMUSDT'
+];
+
 export const DEFAULT_SETTINGS: Settings = {
   maxLossUsd: 2,
   marginUsd: 10,
@@ -94,7 +101,7 @@ export const DEFAULT_SETTINGS: Settings = {
   tpR: 1.5,
   ltf: '5m',
   htf: '1h',
-  watchlist: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'POLUSDT', 'LINKUSDT'],
+  watchlist: [...DEFAULT_WATCHLIST],
   enabled: {
     TREND_FVG_RETEST: true,
     TREND_EMA_PULLBACK: true,

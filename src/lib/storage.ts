@@ -24,7 +24,10 @@ function write(key: string, v: unknown) {
 
 export function loadSettings(): Settings {
   const s = read<Partial<Settings>>(K_SETTINGS) ?? {};
-  return { ...DEFAULT_SETTINGS, ...s, enabled: { ...DEFAULT_SETTINGS.enabled, ...(s.enabled ?? {}) }, tune: { ...DEFAULT_SETTINGS.tune, ...(s.tune ?? {}) } };
+  const old8 = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'POLUSDT', 'LINKUSDT'];
+  const isOld8 = s.watchlist && s.watchlist.length === 8 && old8.every((x) => s.watchlist!.includes(x));
+  const watchlist = !s.watchlist || isOld8 || s.watchlist.length < 5 ? [...DEFAULT_SETTINGS.watchlist] : s.watchlist;
+  return { ...DEFAULT_SETTINGS, ...s, watchlist, enabled: { ...DEFAULT_SETTINGS.enabled, ...(s.enabled ?? {}) }, tune: { ...DEFAULT_SETTINGS.tune, ...(s.tune ?? {}) } };
 }
 export const saveSettings = (s: Settings) => write(K_SETTINGS, s);
 

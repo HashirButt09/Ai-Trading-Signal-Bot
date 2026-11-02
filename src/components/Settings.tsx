@@ -140,9 +140,14 @@ export function Settings({ value, onChange, scanner }: { value: S; onChange: (s:
         </div>
         <label className="field">
           <span>Watchlist (Binance USDT-M futures symbols, comma separated)</span>
-          <textarea rows={2} value={wl} onChange={(e) => setWl(e.target.value)} onBlur={() => set('watchlist', [...new Set(wl.split(/[\s,]+/).map((x) => x.trim().toUpperCase()).filter(Boolean))].slice(0, 30))} />
-          <em>Up to 30 pairs. Changing timeframes or pairs restarts the scanner.</em>
+          <textarea rows={3} value={wl} onChange={(e) => setWl(e.target.value)} onBlur={() => set('watchlist', [...new Set(wl.split(/[\s,]+/).map((x) => x.trim().toUpperCase()).filter(Boolean))].slice(0, 100))} />
+          <em>Up to 100 pairs. The scanner tracks and generates trades across all pairs listed here.</em>
         </label>
+        <div className="row gap wrap" style={{ marginTop: 6 }}>
+          <button type="button" className="btn small" onClick={() => { set('watchlist', DEFAULT_SETTINGS.watchlist.slice(0, 10)); setWl(DEFAULT_SETTINGS.watchlist.slice(0, 10).join(', ')); }}>Top 10</button>
+          <button type="button" className="btn small" onClick={() => { set('watchlist', DEFAULT_SETTINGS.watchlist.slice(0, 30)); setWl(DEFAULT_SETTINGS.watchlist.slice(0, 30).join(', ')); }}>Top 30</button>
+          <button type="button" className="btn small" onClick={() => { set('watchlist', DEFAULT_SETTINGS.watchlist); setWl(DEFAULT_SETTINGS.watchlist.join(', ')); }}>Top 30 Active</button>
+        </div>
       </div>
 
       <div className="card form">

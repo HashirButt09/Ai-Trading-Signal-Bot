@@ -205,7 +205,17 @@ export default function App() {
           <section className="col-mid">
             <div className="row between wrap">
               <div className="row gap wrap" style={{ flex: 1 }}>
-                <PairPicker value={symbol} watchlist={settings.watchlist} onPick={(x) => { setSymbol(x); setSelId(null); }} />
+                <PairPicker
+                  value={symbol}
+                  watchlist={settings.watchlist}
+                  onPick={(x) => {
+                    setSymbol(x);
+                    setSelId(null);
+                    if (!settingsRef.current.watchlist.includes(x)) {
+                      update({ ...settingsRef.current, watchlist: [...settingsRef.current.watchlist, x].slice(0, 100) });
+                    }
+                  }}
+                />
                 <span className="mono">{candles.length ? fmtPrice(candles[candles.length - 1].c) : ''}</span>
               </div>
               <div className="row gap">
@@ -221,9 +231,9 @@ export default function App() {
             </div>
             {!scanned && (
               <div className="card small row between wrap gap">
-                <span className="muted">Chart only: <b>{symbol}</b> is not in your scan list, so no signals or alerts for it yet.</span>
-                <button className="btn small primary" disabled={settings.watchlist.length >= 30} onClick={() => update({ ...settingsRef.current, watchlist: [...settingsRef.current.watchlist, symbol] })}>
-                  {settings.watchlist.length >= 30 ? 'Scan list full (30)' : 'Add to scan list'}
+                <span className="muted">Scanning: <b>{symbol}</b> is being added to your scan list for live signals.</span>
+                <button className="btn small primary" disabled={settings.watchlist.length >= 100} onClick={() => update({ ...settingsRef.current, watchlist: [...settingsRef.current.watchlist, symbol].slice(0, 100) })}>
+                  {settings.watchlist.length >= 100 ? 'Scan list full (100)' : 'Add to scan list'}
                 </button>
               </div>
             )}

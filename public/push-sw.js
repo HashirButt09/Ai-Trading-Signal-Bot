@@ -1,4 +1,6 @@
 /* Loaded into the PWA service worker (workbox importScripts). Shows server push notifications even when the app is closed. */
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 self.addEventListener('push', (event) => {
   let d = {};
   try {
