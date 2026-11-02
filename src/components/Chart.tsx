@@ -20,7 +20,7 @@ import {
 import type { Candle, JournalEntry } from '../engine/types';
 import { TF_MS } from '../engine/time';
 import { DEF_BY_TYPE, label as indLabel, type ActiveIndicator } from '../lib/indicators';
-import { fmtPrice } from '../lib/format';
+import { fmtPrice, pricePrecision } from '../lib/format';
 
 interface Props {
   symbol: string;
@@ -33,19 +33,6 @@ interface Props {
 }
 
 const ts = (ms: number) => Math.floor(ms / 1000) as UTCTimestamp;
-
-/** decimals Binance uses for this pair, read from the prices themselves (2 to 8) */
-export function pricePrecision(candles: Candle[]): number {
-  let d = 2;
-  for (const c of candles.slice(-100)) {
-    for (const v of [c.o, c.h, c.l, c.c]) {
-      const s = v.toFixed(10).replace(/0+$/, '');
-      const k = s.includes('.') ? s.length - s.indexOf('.') - 1 : 0;
-      if (k > d) d = k;
-    }
-  }
-  return Math.min(8, d);
-}
 type AnySeries = ISeriesApi<'Line'> | ISeriesApi<'Histogram'>;
 interface Plot {
   ind: ActiveIndicator;
