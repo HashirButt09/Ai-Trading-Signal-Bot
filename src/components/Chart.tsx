@@ -209,11 +209,16 @@ export function Chart({ symbol, interval, candles, entries, selected, indicators
     if (!c) return;
     const tops: number[] = [];
     let y = 0;
-    c.panes().forEach((_, i) => {
-      tops.push(y);
-      y += c.paneSize(i).height + 1;
-    });
-    setPaneTops((prev) => (prev.join() === tops.join() ? prev : tops));
+    try {
+      c.panes().forEach((_, i) => {
+        tops.push(y);
+        const s = c.paneSize(i);
+        if (s && typeof s.height === 'number') y += s.height + 1;
+      });
+      setPaneTops((prev) => (prev.join() === tops.join() ? prev : tops));
+    } catch {
+      /* pane layout in progress */
+    }
   };
   useEffect(() => {
     if (!box.current) return;
@@ -234,12 +239,33 @@ export function Chart({ symbol, interval, candles, entries, selected, indicators
     const timeAt = (j: number) => ts(j < n ? candles[j].t : candles[n - 1].t + (j - n + 1) * step);
 
     if (full) {
+      if (symbolChanged) {
+        // clear old trade lines and drawings from previous coin so they don't corrupt the scale
+        if (cs.current) {
+          lines.current.forEach((l) => cs.current!.removePriceLine(l));
+          lines.current = [];
+        }
+        if (chartRef.current) {
+          for (const s of drawn.current) chartRef.current.removeSeries(s);
+          drawn.current = [];
+        }
+      }
+
       // show as many decimals as Binance quotes for this pair (0.08754 must not be rounded to 0.09)
       const precision = pricePrecision(candles);
       const priceFormat = { type: 'price' as const, precision, minMove: Number((10 ** -precision).toFixed(precision)) };
       cs.current.applyOptions({ priceFormat });
       for (const p of plots.current) if (DEF_BY_TYPE[p.ind.type].pane === 'overlay') for (const s of Object.values(p.series)) s.applyOptions({ priceFormat });
       cs.current.setData(candles.map(toBar));
+
+      if (symbolChanged) {
+        try {
+          cs.current.priceScale().applyOptions({ autoScale: true });
+          chartRef.current?.priceScale('right').applyOptions({ autoScale: true });
+        } catch {
+          /* ignore */
+        }
+      }
     }
     else cs.current.update(toBar(candles[n - 1]));
 
@@ -282,7 +308,15 @@ export function Chart({ symbol, interval, candles, entries, selected, indicators
         }
       }
     }
-    if (full && symbolChanged) chartRef.current?.timeScale().fitContent();
+    if (full && symbolChanged) {
+      chartRef.current?.timeScale().fitContent();
+      try {
+        cs.current?.priceScale().applyOptions({ autoScale: true });
+        chartRef.current?.priceScale('right').applyOptions({ autoScale: true });
+      } catch {
+        /* ignore */
+      }
+    }
     lastKey.current = key;
     lastLen.current = n;
   }, [candles, computed, symbol, interval, indKey]);
