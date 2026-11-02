@@ -74,12 +74,17 @@ export interface PushPayload {
 export type Sender = (sub: PushSub, payload: PushPayload) => Promise<'ok' | 'gone' | string>;
 
 export function vapidReady(): boolean {
-  return !!(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
+  const pub = process.env.VAPID_PUBLIC_KEY || process.env.vapid_public_key;
+  const priv = process.env.VAPID_PRIVATE_KEY || process.env.vapid_private_key;
+  return !!(pub && priv);
 }
 
 export const webPushSender: Sender = async (sub, payload) => {
   try {
-    webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:signals@example.com', process.env.VAPID_PUBLIC_KEY!, process.env.VAPID_PRIVATE_KEY!);
+    const pub = process.env.VAPID_PUBLIC_KEY || process.env.vapid_public_key;
+    const priv = process.env.VAPID_PRIVATE_KEY || process.env.vapid_private_key;
+    const subj = process.env.VAPID_SUBJECT || process.env.vapid_subject || 'mailto:signals@example.com';
+    webpush.setVapidDetails(subj, pub!, priv!);
     await webpush.sendNotification(sub, JSON.stringify(payload), { TTL: 600, urgency: 'high', topic: payload.tag.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) });
     return 'ok';
   } catch (e: any) {

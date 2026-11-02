@@ -10,8 +10,8 @@ export interface Kv {
 }
 
 export function kvConfig(): { url: string; token: string } | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || process.env.upstash_redis_rest_url || process.env.kv_rest_api_url;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || process.env.upstash_redis_rest_token || process.env.kv_rest_api_token;
   return url && token ? { url: url.replace(/\/+$/, ''), token } : null;
 }
 

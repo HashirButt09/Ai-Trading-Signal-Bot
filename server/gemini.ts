@@ -2,13 +2,13 @@
 export type GeminiJson = (system: string, prompt: string) => Promise<any>;
 
 export function geminiReady() {
-  return !!process.env.GEMINI_API_KEY;
+  return !!(process.env.GEMINI_API_KEY || process.env.gemini_api_key);
 }
 
 export const geminiJson: GeminiJson = async (system, prompt) => {
-  const key = process.env.GEMINI_API_KEY;
+  const key = process.env.GEMINI_API_KEY || process.env.gemini_api_key;
   if (!key) throw new Error('GEMINI_API_KEY not set');
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const model = process.env.GEMINI_MODEL || process.env.gemini_model || 'gemini-2.5-flash';
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
