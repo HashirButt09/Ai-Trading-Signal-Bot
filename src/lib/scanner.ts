@@ -283,11 +283,33 @@ export class Scanner {
     await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);
     this.catchUp();
     // Scan all loaded pairs immediately for any active setups formed on the latest closed candle
+    const candidateSetups: { sym: string; candle: Candle; pWin?: number; rr: number }[] = [];
     for (const sym of syms) {
       const L = this.ltf.get(sym);
-      if (L?.length) {
-        this.onLtfClose(sym, L[L.length - 1]);
+      const H = this.htf.get(sym);
+      if (L?.length && H?.length) {
+        const lastCandle = L[L.length - 1];
+        const r = evaluate(sym, buildLtf(L), L.length - 1, buildHtf(H), this.settings);
+        if (r.signal && !this.journal.some((e) => e.signal.id === r.signal!.id)) {
+          const g = gate(r.signal, this.model, this.health, this.settings);
+          r.signal.pWin = g.pWin;
+          if (g.status === 'ACTIVE') {
+            candidateSetups.push({ sym, candle: lastCandle, pWin: g.pWin, rr: r.signal.rr });
+          } else {
+            this.onLtfClose(sym, lastCandle);
+          }
+        }
       }
+    }
+    const isModelTrained = this.model && this.model.n >= this.settings.metaMinSamples && !this.model.off;
+    candidateSetups.sort((a, b) => {
+      if (isModelTrained) {
+        return (b.pWin ?? 0) - (a.pWin ?? 0);
+      }
+      return b.rr - a.rr;
+    });
+    for (const item of candidateSetups) {
+      this.onLtfClose(item.sym, item.candle);
     }
     this.emit();
   }
@@ -533,16 +555,28 @@ export class Scanner {
 
     const d = gate(r.signal, this.model, this.health, s);
     r.signal.pWin = d.pWin;
+
+    const maxOpen = s.maxOpenTrades ?? 2;
+    const maxPerCandle = s.maxNewPerCandle ?? 1;
+    const activeOpenCount = this.journal.filter((e) => e.outcome === 'OPEN' && e.status === 'ACTIVE').length;
+    const newOnThisCandle = this.journal.filter((e) => e.signal.time === r.signal!.time && e.status === 'ACTIVE').length;
+
+    let status = d.status;
+    if (status === 'ACTIVE' && (activeOpenCount >= maxOpen || newOnThisCandle >= maxPerCandle)) {
+      status = 'FILTERED';
+      r.signal.scenario = (r.signal.scenario ? r.signal.scenario + ' · ' : '') + 'max open trades / one new trade per candle';
+    }
+
     const entry: JournalEntry = {
       signal: r.signal,
-      status: d.status,
+      status,
       outcome: 'OPEN',
       rNet: 0,
       barsOpen: 0
     };
     this.journal.push(entry);
     this.persist();
-    if (d.status === 'ACTIVE') void alertSignal(r.signal, s);
+    if (status === 'ACTIVE') void alertSignal(r.signal, s);
   }
 
   retrainNow() {

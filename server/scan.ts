@@ -135,6 +135,20 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
     let health = playbookHealth(journal, s);
     const ids = new Set(journal.map((e) => e.signal.id));
 
+    interface SymCtx {
+      sym: string;
+      L: Candle[];
+      H: Candle[];
+      lctx: ReturnType<typeof buildLtf>;
+      hctx: ReturnType<typeof buildHtf>;
+      firstNew: number;
+      start: number;
+      key: string;
+      curIdx: number;
+    }
+
+    const readySyms: SymCtx[] = [];
+
     for (const sym of due) {
       const got = data.get(sym);
       if (!got) continue;
@@ -150,6 +164,7 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
       const firstNew = last ? L.findIndex((k) => k.t > last) : L.length - 1;
       if (firstNew < 0) {
         cursor[key] = L[L.length - 1].t;
+        report.processed.push(sym);
         continue;
       }
       // replay from the oldest candle any open trade still needs (advanceEntry ignores already-applied candles)
@@ -160,9 +175,8 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
         if (idx >= 0) start = Math.min(start, idx);
       }
 
-      const lctx = buildLtf(L);
-      const hctx = buildHtf(H);
-      for (let i = start; i < L.length; i++) {
+      // advance open trades before firstNew
+      for (let i = start; i < firstNew; i++) {
         const k = L[i];
         let nRes = 0;
         journal = journal.map((e) => {
@@ -175,21 +189,105 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
           report.resolvedNow += nRes;
           health = playbookHealth(journal, s);
         }
-        if (i < firstNew || i < WARMUP) continue;
+      }
+
+      readySyms.push({
+        sym,
+        L,
+        H,
+        lctx: buildLtf(L),
+        hctx: buildHtf(H),
+        firstNew,
+        start,
+        key,
+        curIdx: firstNew
+      });
+    }
+
+    // collect all timestamps across new candles
+    const newTimesSet = new Set<number>();
+    for (const r of readySyms) {
+      for (let i = r.firstNew; i < r.L.length; i++) {
+        newTimesSet.add(r.L[i].t);
+      }
+    }
+    const newTimes = [...newTimesSet].sort((a, b) => a - b);
+
+    for (const t of newTimes) {
+      const setupsAtT: { signal: Signal; g: ReturnType<typeof gate>; k: Candle }[] = [];
+
+      for (const item of readySyms) {
+        const sym = item.sym;
+        const isOpen = (e: JournalEntry) => e.signal.symbol === sym && e.outcome === 'OPEN' && e.signal.ltf === s.ltf;
+        const i = item.curIdx;
+        const k = item.L[i];
+        if (!k || k.t !== t) continue;
+        item.curIdx++;
+
+        let nRes = 0;
+        journal = journal.map((e) => {
+          if (!isOpen(e)) return e;
+          const n = advanceEntry(e, k, s);
+          if (n.outcome !== 'OPEN') nRes++;
+          return n;
+        });
+        if (nRes) {
+          report.resolvedNow += nRes;
+          health = playbookHealth(journal, s);
+        }
+
+        if (i < WARMUP) continue;
         if (journal.some(isOpen)) continue; // one position per pair at a time
-        const r = evaluate(sym, lctx, i, hctx, s);
+
+        const r = evaluate(sym, item.lctx, i, item.hctx, s);
         if (!r.signal || ids.has(r.signal.id)) continue;
         const g = gate(r.signal, model, health, s);
         r.signal.pWin = g.pWin;
-        journal.push({ signal: r.signal, status: g.status, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: k.t });
-        ids.add(r.signal.id);
-        report.newSignals.push(`${r.signal.id}:${g.status}`);
-        // only alert if the trigger candle just closed; a signal found while catching up is journaled for learning only
-        const closedAgo = now - (k.t + step);
-        if (g.status === 'ACTIVE' && closedAgo <= step + 90_000) fresh.push(r.signal);
+        setupsAtT.push({ signal: r.signal, g, k });
       }
-      cursor[key] = L[L.length - 1].t;
-      report.processed.push(sym);
+
+      if (!setupsAtT.length) continue;
+
+      const maxOpen = s.maxOpenTrades ?? 2;
+      const maxNew = s.maxNewPerCandle ?? 1;
+      const activeOpenCount = journal.filter((e) => e.outcome === 'OPEN' && e.status === 'ACTIVE').length;
+      const availableSlots = Math.max(0, Math.min(maxOpen - activeOpenCount, maxNew));
+
+      const activeSetups = setupsAtT.filter((x) => x.g.status === 'ACTIVE');
+      const otherSetups = setupsAtT.filter((x) => x.g.status !== 'ACTIVE');
+
+      const isModelTrained = model && model.n >= s.metaMinSamples && !model.off;
+      activeSetups.sort((a, b) => {
+        if (isModelTrained) {
+          return (b.signal.pWin ?? 0) - (a.signal.pWin ?? 0);
+        }
+        return b.signal.rr - a.signal.rr;
+      });
+
+      for (let idx = 0; idx < activeSetups.length; idx++) {
+        const item = activeSetups[idx];
+        let status = item.g.status;
+        if (idx >= availableSlots) {
+          status = 'FILTERED';
+          item.signal.scenario = (item.signal.scenario ? item.signal.scenario + ' · ' : '') + 'max open trades / one new trade per candle';
+        }
+        journal.push({ signal: item.signal, status, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: item.k.t });
+        ids.add(item.signal.id);
+        report.newSignals.push(`${item.signal.id}:${status}`);
+        const closedAgo = now - (item.k.t + step);
+        if (status === 'ACTIVE' && closedAgo <= step + 90_000) fresh.push(item.signal);
+      }
+
+      for (const item of otherSetups) {
+        journal.push({ signal: item.signal, status: item.g.status, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: item.k.t });
+        ids.add(item.signal.id);
+        report.newSignals.push(`${item.signal.id}:${item.g.status}`);
+      }
+    }
+
+    for (const item of readySyms) {
+      cursor[item.key] = item.L[item.L.length - 1].t;
+      report.processed.push(item.sym);
     }
 
     if (report.resolvedNow && resolved(journal).length >= s.metaMinSamples) {

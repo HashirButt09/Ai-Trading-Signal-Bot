@@ -20,9 +20,14 @@ export const geminiJson: GeminiJson = async (system, prompt) => {
         body: JSON.stringify({
           systemInstruction: { parts: [{ text: system }] },
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.3, maxOutputTokens: 6000, responseMimeType: 'application/json' }
+          generationConfig: {
+            temperature: 0.3,
+            maxOutputTokens: 6000,
+            responseMimeType: 'application/json',
+            ...(/2\.5/.test(model) ? { thinkingConfig: { thinkingBudget: 1024 } } : {})
+          }
         }),
-        signal: AbortSignal.timeout(30_000)
+        signal: AbortSignal.timeout(38_000)
       });
       const out: any = await res.json().catch(() => ({}));
       if (!res.ok) {

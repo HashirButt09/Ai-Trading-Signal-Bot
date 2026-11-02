@@ -115,6 +115,8 @@ export function Settings({ value, onChange, scanner }: { value: S; onChange: (s:
           {numField('marginUsd', 'Margin per trade (USDT)', 1)}
           {numField('maxLossUsd', 'Max loss at stop (USDT, incl. fees)', 0.5, 'Leverage is chosen so the stop never loses more than this')}
           {numField('maxLeverage', 'Leverage ceiling', 1, 'Check your pair’s max on Binance')}
+          {numField('maxOpenTrades', 'Max open trades', 1, 'Max simultaneous active positions across all coins')}
+          {numField('maxNewPerCandle', 'Max new trades per candle', 1, 'Max new active trades on a single candle close')}
           {numField('tpR', 'Target for trend plays (R)', 0.1, 'Range plays always target the range midpoint')}
           {numField('minSlPct', 'Skip stops tighter than (%)', 0.01, undefined, 100)}
           {numField('takerFee', 'Taker fee per side (%)', 0.005, 'Binance futures default 0.04%', 100)}

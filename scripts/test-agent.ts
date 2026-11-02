@@ -184,6 +184,12 @@ const loser = (i: number, t: number): JournalEntry => ({
     for (let i = 0; i < 10_000; i++) { const v = 0.0025, o = px, c = o * (1 + gauss() * v); m5.push({ t: T0 + i * S5, o, h: Math.max(o, c) * (1 + Math.abs(gauss()) * v * 0.6), l: Math.min(o, c) * (1 - Math.abs(gauss()) * v * 0.6), c, v: 1000 * (0.5 + rnd() * 1.5) }); px = c; }
     mk[p] = { m5, h1: agg(m5, 12) };
   }
+  const kvManual = await fresh();
+  const manualDs: string[] = [];
+  for (let k = 0; k < 5; k++) manualDs.push((await runAgent({ kv: kvManual, history, send, now: () => NOW + k * 86_400_000 }, 'manual')).decision);
+  const stManual = JSON.parse(kvManual.data.get(K.agent));
+  ok(manualDs.every((x) => x === 'kept') && stManual.paused === null && stManual.keptStreak === 0, '5 manual runs that keep settings must NOT pause the agent');
+
   const kv = await fresh();
   await setSub(kv, { endpoint: 'https://push.example/x', keys: { p256dh: 'p', auth: 'a' } }, ['AAAUSDT']);
   pushes.length = 0;

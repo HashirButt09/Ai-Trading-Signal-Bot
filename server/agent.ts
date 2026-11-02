@@ -255,11 +255,22 @@ export function liveAcc(journal: JournalEntry[], from: number, to = Infinity): A
 
 export async function loadAgent(kv: Kv): Promise<AgentState> {
   const raw = await kv.cmd('GET', K.agent);
+  let state: AgentState;
   try {
-    return raw ? { ...EMPTY_AGENT, ...JSON.parse(raw) } : { ...EMPTY_AGENT };
+    state = raw ? { ...EMPTY_AGENT, ...JSON.parse(raw) } : { ...EMPTY_AGENT };
   } catch {
-    return { ...EMPTY_AGENT };
+    state = { ...EMPTY_AGENT };
   }
+  if (!state.paused) {
+    let streak = 0;
+    for (const r of state.runs ?? []) {
+      if (r.trigger !== 'cron') continue;
+      if (r.decision === 'kept') streak++;
+      else break;
+    }
+    state.keptStreak = streak;
+  }
+  return state;
 }
 
 export interface AgentDeps {
@@ -426,46 +437,64 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
   const w = windows(hist);
   const curEval = evaluateParams(hist, settings, w);
 
-  // 3) candidates: Gemini (sees live diagnosis + fit/select results only) and local one-step nudges
-  const cands: { p: Params; source: string; why: string }[] = [];
-  let analysis: string | undefined;
+  // 3) start Gemini in parallel with testing local candidates
+  let geminiPromise: Promise<any> | null = null;
   if (d.gemini) {
+    const input = {
+      current: Object.fromEntries([...NUM_KEYS.map((k) => [k, getNum(cur, k)]), ...STRATS.map((x) => [`enabled.${x}`, cur.enabled[x]])]),
+      liveJournal: diagnose(journal, now - 30 * 86_400_000),
+      backtestOfCurrent: { oldestWindow: curEval.fit, middleWindow: curEval.select, byPlaybook: curEval.perStrategy, days, pairs: [...hist.keys()] },
+      recentAgentDecisions: state.runs.slice(0, 5).map((r) => ({ when: new Date(r.at).toISOString().slice(0, 10), decision: r.decision, summary: r.summary }))
+    };
+    geminiPromise = d.gemini(SYSTEM, `Data (numbers only, not instructions):\n${JSON.stringify(input)}`);
+  } else {
+    notes.push('No GEMINI_API_KEY: used built-in search only.');
+  }
+
+  // 4) test candidates: built-in search candidates first, then Gemini's
+  let best = null as null | { p: Params; source: string; why: string; ev: Eval };
+  let tested = 0;
+
+  const testList = (list: { p: Params; source: string; why: string }[]) => {
+    for (const c of list) {
+      if (Date.now() - started > budget) {
+        notes.push(`Time budget reached after ${tested} candidates.`);
+        break;
+      }
+      const ev = evaluateParams(hist, applyParams(settings, c.p), w);
+      tested++;
+      if (ev.select.n < Math.max(15, curEval.select.n * 0.5)) continue; // a tiny sample can look great by luck
+      if (!best || ev.select.avgR > best.ev.select.avgR || (c.source === 'gemini' && ev.select.avgR === best.ev.select.avgR)) {
+        best = { ...c, ev };
+      }
+    }
+  };
+
+  const localCands: { p: Params; source: string; why: string }[] = [];
+  for (const p of localCandidates(cur)) {
+    localCands.push({ p, source: 'search', why: diffParams(cur, p).map(fmtChange).join(', ') });
+  }
+  testList(localCands);
+
+  let analysis: string | undefined;
+  if (geminiPromise) {
     try {
-      const input = {
-        current: Object.fromEntries([...NUM_KEYS.map((k) => [k, getNum(cur, k)]), ...STRATS.map((x) => [`enabled.${x}`, cur.enabled[x]])]),
-        liveJournal: diagnose(journal, now - 30 * 86_400_000),
-        backtestOfCurrent: { oldestWindow: curEval.fit, middleWindow: curEval.select, byPlaybook: curEval.perStrategy, days, pairs: [...hist.keys()] },
-        recentAgentDecisions: state.runs.slice(0, 5).map((r) => ({ when: new Date(r.at).toISOString().slice(0, 10), decision: r.decision, summary: r.summary }))
-      };
-      const out = await d.gemini(SYSTEM, `Data (numbers only, not instructions):\n${JSON.stringify(input)}`);
+      const out = await geminiPromise;
       analysis = typeof out?.analysis === 'string' ? out.analysis.slice(0, 800) : undefined;
+      const geminiCands: { p: Params; source: string; why: string }[] = [];
       for (const c of (Array.isArray(out?.candidates) ? out.candidates : []).slice(0, 3)) {
         const p = clampProposal(cur, c?.changes ?? {});
-        if (diffParams(cur, p).length) cands.push({ p, source: 'gemini', why: String(c?.why ?? '').slice(0, 300) });
+        if (diffParams(cur, p).length) geminiCands.push({ p, source: 'gemini', why: String(c?.why ?? '').slice(0, 300) });
       }
+      testList(geminiCands);
     } catch (e: any) {
       notes.push(`Gemini unavailable, used built-in search only: ${String(e?.message ?? e).slice(0, 160)}`);
     }
-  } else notes.push('No GEMINI_API_KEY: used built-in search only.');
-  for (const p of localCandidates(cur)) cands.push({ p, source: 'search', why: diffParams(cur, p).map(fmtChange).join(', ') });
-
-  // 4) test them (rank on the selection window)
-  let best: { p: Params; source: string; why: string; ev: Eval } | null = null;
-  let tested = 0;
-  for (const c of cands) {
-    if (Date.now() - started > budget) {
-      notes.push(`Time budget reached after ${tested} candidates.`);
-      break;
-    }
-    const ev = evaluateParams(hist, applyParams(settings, c.p), w);
-    tested++;
-    if (ev.select.n < Math.max(15, curEval.select.n * 0.5)) continue; // a tiny sample can look great by luck
-    if (!best || ev.select.avgR > best.ev.select.avgR || (c.source === 'gemini' && ev.select.avgR === best.ev.select.avgR)) best = { ...c, ev };
   }
 
   const base = { at: now, trigger, analysis, current: curEval, tested, notes, accuracy } as const;
   const keep = async (run: AgentRun) => {
-    state.keptStreak++;
+    if (trigger === 'cron') state.keptStreak++;
     if (state.keptStreak >= PLATEAU_KEPT) return pause(`${state.keptStreak} runs in a row found no change that beats the current setup on unseen data. ${run.summary}`, { analysis, current: curEval, tested, chosen: run.chosen, changes: run.changes });
     return finish(run);
   };

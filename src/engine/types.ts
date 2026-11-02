@@ -81,6 +81,8 @@ export interface Settings {
   tune: Tune;
   agentEnabled: boolean; // let the server's AI agent tune settings automatically
   minWinChance: number; // your floor for the AI's estimated win chance (0 = off); the agent cannot lower it
+  maxOpenTrades: number; // max simultaneous active trades across all coins
+  maxNewPerCandle: number; // max new active trades on a single candle close
   editedAt: number; // when settings were last changed on this device (newer side wins when syncing)
 }
 
@@ -114,6 +116,8 @@ export const DEFAULT_SETTINGS: Settings = {
   maxLossUsd: 2,
   marginUsd: 10,
   maxLeverage: 50,
+  maxOpenTrades: 2,
+  maxNewPerCandle: 1,
   minSlPct: 0.0015,
   takerFee: 0.0004,
   slippage: 0.0005,

@@ -184,5 +184,41 @@ const rb = await runScan(bad);
 ok(Object.keys(rb.errors).length === 2 && JSON.parse(mem.data.get(K.status)).lastError.includes('451'), 'Binance errors are recorded in status for the app to show');
 ok(!mem.data.has(K.lock), 'lock released after a failed tick');
 
+// ---- max open trades guard ----
+{
+  const guardMem = memoryKv();
+  const guardKv = restKv('https://fake.upstash.io', 'tok', async (url: string, init: any) => {
+    const body = JSON.parse(init.body);
+    const result = url.endsWith('/pipeline') ? (await guardMem.pipe(body)).map((r) => ({ result: r })) : { result: await guardMem.cmd(...body) };
+    return { ok: true, status: 200, json: async () => result } as any;
+  });
+  const fourPairs = ['P1USDT', 'P2USDT', 'P3USDT', 'P4USDT'];
+  const guardMarket: Record<string, { m5: Candle[]; h1: Candle[] }> = {};
+  for (const p of fourPairs) guardMarket[p] = market.AAAUSDT;
+  const guardSettings = { ...DEFAULT_SETTINGS, watchlist: fourPairs, maxOpenTrades: 2, maxNewPerCandle: 2 };
+  await guardMem.cmd('SET', K.settings, JSON.stringify(guardSettings));
+
+  const targetSignalTime = bt.trades[0].entry.signal.time;
+  const guardNow = targetSignalTime + S5; // candle has just closed
+  const guardKlines = async (sym: string, interval: string, limit: number) => {
+    const src = interval === '5m' ? guardMarket[sym].m5 : guardMarket[sym].h1;
+    const step = TF_MS[interval];
+    return src.filter((c) => c.t + step <= guardNow).slice(-limit);
+  };
+
+  const guardDeps = { kv: guardKv, klines: guardKlines, send, now: () => guardNow };
+  const rep = await runScan(guardDeps);
+  const guardJournal = JSON.parse(guardMem.data.get(K.journal) ?? '[]') as any[];
+  const activeOpens = guardJournal.filter((e) => e.outcome === 'OPEN' && e.status === 'ACTIVE');
+  const filteredOpens = guardJournal.filter((e) => e.outcome === 'OPEN' && e.status === 'FILTERED');
+  ok(
+    rep.processed.length === 4 &&
+      guardJournal.length === 4 &&
+      activeOpens.length <= 2 &&
+      filteredOpens.length >= 2,
+    `4 simultaneous setups produce at most 2 open ACTIVE trades (${activeOpens.length} active, ${filteredOpens.length} filtered)`
+  );
+}
+
 console.log(fails ? `\n${fails} FAILED` : '\nAll server checks passed');
 process.exit(fails ? 1 : 0);
