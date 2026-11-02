@@ -30,7 +30,7 @@ r = await mod.POST(req(sig, { 'x-app-key': 'letmein' }));
 let j: any = await r.json();
 ok(r.status === 200 && j.text.startsWith('VERDICT'), 'valid request -> 200 with review text');
 ok(!lastCall!.url.includes('secret-key-123') && lastCall!.init.headers['x-goog-api-key'] === 'secret-key-123', 'API key sent in header, never in the URL');
-ok(lastCall!.url.includes('gemini-2.5-flash'), 'default model used');
+ok(lastCall!.url.includes('gemini-3.8-flash'), 'default model used');
 const sent = JSON.parse(lastCall!.init.body);
 ok(!sent.tools && sent.systemInstruction.parts[0].text.includes('advisory only'), 'no search tool by default; advisory-only system prompt present');
 
@@ -51,7 +51,7 @@ ok(r.status === 400, 'invalid JSON -> 400');
 r = await mod.POST(req({ mode: 'signal', data: { x: 'a'.repeat(30000) } }, { 'x-app-key': 'letmein' }));
 ok(r.status === 413, 'oversized body -> 413');
 
-geminiReply = { ok: false, status: 404, body: { error: { message: 'models/gemini-2.5-flash is not found' } } };
+geminiReply = { ok: false, status: 404, body: { error: { message: 'models/gemini-3.8-flash is not found' } } };
 r = await mod.POST(req(sig, { 'x-app-key': 'letmein' }));
 j = await r.json();
 ok(r.status === 502 && j.error.includes('not found') && j.error.includes('GEMINI_MODEL'), 'retired model -> readable error telling you to set GEMINI_MODEL');
