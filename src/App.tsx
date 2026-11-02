@@ -12,6 +12,7 @@ import { PairPicker } from './components/PairPicker';
 import { useExtraSeries } from './lib/useAnySymbol';
 import { IndicatorsMenu } from './components/IndicatorsMenu';
 import { DEF_BY_TYPE, loadIndicators, saveIndicators, type ActiveIndicator } from './lib/indicators';
+import { fmtPrice } from './lib/format';
 import type { JournalEntry } from './engine/types';
 import { Chart } from './components/Chart';
 import { Watchlist } from './components/Watchlist';
@@ -205,7 +206,7 @@ export default function App() {
             <div className="row between wrap">
               <div className="row gap wrap" style={{ flex: 1 }}>
                 <PairPicker value={symbol} watchlist={settings.watchlist} onPick={(x) => { setSymbol(x); setSelId(null); }} />
-                <span className="mono">{candles.length ? candles[candles.length - 1].c : ''}</span>
+                <span className="mono">{candles.length ? fmtPrice(candles[candles.length - 1].c) : ''}</span>
               </div>
               <div className="row gap">
                 <button className="btn small ind-btn" onClick={() => setIndMenu({ focus: null })} aria-label="Indicators">

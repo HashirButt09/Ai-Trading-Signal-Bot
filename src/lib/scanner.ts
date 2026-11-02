@@ -4,7 +4,7 @@ import { buildLtf, evaluate } from '../engine/strategies';
 import { advanceEntry, gate, playbookHealth, resolved, retrain, type PlaybookHealth } from '../engine/journal';
 import type { MetaModel } from '../engine/meta';
 import { TF_MS } from '../engine/time';
-import { fetchKlines, parseKlineMessage, streamUrl } from './binance';
+import { fetchKlines, fetchTickerPrices, parseKlineMessage, streamUrl } from './binance';
 import { loadJournal, loadModel, saveJournal, saveModel } from './storage';
 import { alertSignal } from './notify';
 import type { StrategyId } from '../engine/types';
@@ -57,6 +57,7 @@ export class Scanner {
   remote = false;
   server: ServerView = { mode: 'off', error: '', info: null, checkedAt: 0 };
   private ver = -1;
+  private priceTimer: ReturnType<typeof setInterval> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private afterCloseTimer: ReturnType<typeof setTimeout> | null = null;
   private settingsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -237,9 +238,12 @@ export class Scanner {
     this.stopped = false;
     this.conn = 'loading';
     this.emit();
+    if (this.priceTimer) clearInterval(this.priceTimer);
+    this.priceTimer = setInterval(() => void this.refreshTickerPrices(), 2000);
     try {
       await this.loadHistory();
       if (this.stopped) return;
+      void this.refreshTickerPrices();
       this.connect();
     } catch (e: any) {
       this.conn = 'error';
@@ -251,6 +255,8 @@ export class Scanner {
 
   stop() {
     this.stopped = true;
+    if (this.priceTimer) clearInterval(this.priceTimer);
+    this.priceTimer = null;
     if (this.timer) clearTimeout(this.timer);
     if (this.afterCloseTimer) clearTimeout(this.afterCloseTimer);
     this.ws?.close();
@@ -352,6 +358,71 @@ export class Scanner {
         this.scheduleReconnect();
       }
     }, delay);
+  }
+
+  private async refreshTickerPrices() {
+    if (this.stopped) return;
+    try {
+      const prices = await fetchTickerPrices();
+      if (this.stopped) return;
+      const { ltf, htf, watchlist } = this.settings;
+      let changed = false;
+
+      for (const sym of watchlist) {
+        const p = prices[sym];
+        if (!p || !Number.isFinite(p)) continue;
+
+        const st = this.state.get(sym);
+        if (st && st.price !== p) {
+          st.price = p;
+          changed = true;
+        }
+
+        for (const interval of [ltf, htf]) {
+          const key = `${sym}|${interval}`;
+          const cur = this.forming.get(key);
+          const base = (interval === ltf ? this.ltf : this.htf).get(sym);
+          const step = TF_MS[interval] ?? 60_000;
+          const now = Date.now();
+          const candleOpen = Math.floor(now / step) * step;
+
+          if (cur && cur.t === candleOpen) {
+            if (cur.c !== p) {
+              cur.c = p;
+              if (p > cur.h) cur.h = p;
+              if (p < cur.l) cur.l = p;
+              changed = true;
+            }
+          } else if (base?.length) {
+            const last = base[base.length - 1];
+            if (candleOpen > last.t) {
+              this.forming.set(key, {
+                t: candleOpen,
+                o: last.c,
+                h: Math.max(last.c, p),
+                l: Math.min(last.c, p),
+                c: p,
+                v: 0
+              });
+              changed = true;
+            } else if (last.t === candleOpen) {
+              if (last.c !== p) {
+                last.c = p;
+                if (p > last.h) last.h = p;
+                if (p < last.l) last.l = p;
+                changed = true;
+              }
+            }
+          }
+        }
+      }
+
+      if (changed) {
+        this.emit();
+      }
+    } catch {
+      /* network glitch, socket or next 2s poll will retry */
+    }
   }
 
   private refreshState(symbol: string) {

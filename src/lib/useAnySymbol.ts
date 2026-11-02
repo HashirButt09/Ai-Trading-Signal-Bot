@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Candle } from '../engine/types';
-import { fetchKlines, fetchSymbols, parseKlineMessage, streamUrl } from './binance';
+import { fetchKlines, fetchSinglePrice, fetchSymbols, parseKlineMessage, streamUrl } from './binance';
 
 /** Live candles for a pair that is not in the scanned watchlist (chart only, no signals). */
 export function useExtraSeries(symbol: string, interval: string, enabled: boolean): { candles: Candle[]; error: string } {
@@ -10,12 +10,31 @@ export function useExtraSeries(symbol: string, interval: string, enabled: boolea
     if (!enabled) return;
     let alive = true;
     let ws: WebSocket | null = null;
+    let timer: ReturnType<typeof setInterval> | null = null;
     setCandles([]);
     setError('');
     fetchKlines(symbol, interval, 500)
       .then((cs) => {
         if (!alive) return;
         setCandles(cs);
+        timer = setInterval(async () => {
+          if (!alive) return;
+          const p = await fetchSinglePrice(symbol);
+          if (p !== null && alive) {
+            setCandles((prev) => {
+              if (!prev.length) return prev;
+              const last = prev[prev.length - 1];
+              if (last.c === p) return prev;
+              const updated = {
+                ...last,
+                c: p,
+                h: Math.max(last.h, p),
+                l: Math.min(last.l, p)
+              };
+              return [...prev.slice(0, -1), updated];
+            });
+          }
+        }, 2000);
         ws = new WebSocket(streamUrl([symbol], [interval]));
         ws.onmessage = (m) => {
           const ev = parseKlineMessage(m.data as string);
@@ -31,6 +50,7 @@ export function useExtraSeries(symbol: string, interval: string, enabled: boolea
       .catch((e) => alive && setError(e?.message ?? String(e)));
     return () => {
       alive = false;
+      if (timer) clearInterval(timer);
       ws?.close();
     };
   }, [symbol, interval, enabled]);

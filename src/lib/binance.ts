@@ -74,3 +74,27 @@ export async function fetchSymbols(): Promise<string[]> {
     .map((s) => s.symbol as string)
     .sort();
 }
+
+/** Fetch real-time ticker prices for all USDT-M perpetual contracts. */
+export async function fetchTickerPrices(): Promise<Record<string, number>> {
+  const res = await fetch(`${REST_BASE}/fapi/v1/ticker/price`);
+  if (!res.ok) throw new Error(`ticker ${res.status}`);
+  const list = (await res.json()) as { symbol: string; price: string }[];
+  const out: Record<string, number> = {};
+  for (const item of list) {
+    out[item.symbol] = +item.price;
+  }
+  return out;
+}
+
+/** Fetch real-time ticker price for a single contract. */
+export async function fetchSinglePrice(symbol: string): Promise<number | null> {
+  try {
+    const res = await fetch(`${REST_BASE}/fapi/v1/ticker/price?symbol=${symbol}`);
+    if (!res.ok) return null;
+    const item = (await res.json()) as { symbol: string; price: string };
+    return item?.price ? +item.price : null;
+  } catch {
+    return null;
+  }
+}
