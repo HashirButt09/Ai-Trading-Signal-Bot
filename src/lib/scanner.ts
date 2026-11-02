@@ -1,4 +1,4 @@
-import type { Candle, JournalEntry, Regime, Settings } from '../engine/types';
+import { normalizeSymbol, type Candle, type JournalEntry, type Regime, type Settings } from '../engine/types';
 import { buildHtf, htfIndexAt, regimeAt } from '../engine/regime';
 import { buildLtf, evaluate } from '../engine/strategies';
 import { advanceEntry, gate, playbookHealth, resolved, retrain, type PlaybookHealth } from '../engine/journal';
@@ -266,7 +266,8 @@ export class Scanner {
 
   private async loadHistory() {
     const { watchlist, ltf, htf } = this.settings;
-    const queue = [...watchlist];
+    const syms = [...new Set(watchlist.map(normalizeSymbol))];
+    const queue = [...syms];
     const worker = async () => {
       for (let s = queue.shift(); s; s = queue.shift()) {
         try {
@@ -282,7 +283,7 @@ export class Scanner {
     await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);
     this.catchUp();
     // Scan all loaded pairs immediately for any active setups formed on the latest closed candle
-    for (const sym of watchlist) {
+    for (const sym of syms) {
       const L = this.ltf.get(sym);
       if (L?.length) {
         this.onLtfClose(sym, L[L.length - 1]);
@@ -330,7 +331,8 @@ export class Scanner {
   private connect() {
     if (this.stopped) return;
     const { watchlist, ltf, htf } = this.settings;
-    const url = streamUrl(watchlist, [...new Set([ltf, htf])]);
+    const syms = [...new Set(watchlist.map(normalizeSymbol))];
+    const url = streamUrl(syms, [...new Set([ltf, htf])]);
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => {
@@ -377,9 +379,10 @@ export class Scanner {
       const prices = await fetchTickerPrices();
       if (this.stopped) return;
       const { ltf, htf, watchlist } = this.settings;
+      const syms = [...new Set(watchlist.map(normalizeSymbol))];
       let changed = false;
 
-      for (const sym of watchlist) {
+      for (const sym of syms) {
         const p = prices[sym];
         if (!p || !Number.isFinite(p)) continue;
 

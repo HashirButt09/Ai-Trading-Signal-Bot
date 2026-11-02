@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type JournalEntry, type Settings } from '../src/engine/types.js';
+import { DEFAULT_SETTINGS, normalizeSymbol, type JournalEntry, type Settings } from '../src/engine/types.js';
 import type { MetaModel } from '../src/engine/meta.js';
 import type { Kv } from './kv.js';
 
@@ -43,7 +43,7 @@ const parse = <T>(v: unknown, fallback: T): T => {
 export function cleanSettings(s: Partial<Settings>): Settings {
   const m = { ...DEFAULT_SETTINGS, ...s, enabled: { ...DEFAULT_SETTINGS.enabled, ...(s.enabled ?? {}) }, tune: { ...DEFAULT_SETTINGS.tune, ...(s.tune ?? {}) } } as Settings;
   m.reviewPasscode = '';
-  m.watchlist = [...new Set((m.watchlist ?? []).map((x) => String(x).toUpperCase()).filter((x) => /^[A-Z0-9]{2,20}$/.test(x)))].slice(0, 30);
+  m.watchlist = [...new Set((m.watchlist ?? []).map((x) => normalizeSymbol(String(x))).filter((x) => /^[A-Z0-9]{2,20}$/.test(x)))].slice(0, 100);
   return m;
 }
 

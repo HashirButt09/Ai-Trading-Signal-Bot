@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type JournalEntry, type Settings } from '../engine/types';
+import { DEFAULT_SETTINGS, normalizeSymbol, type JournalEntry, type Settings } from '../engine/types';
 import type { MetaModel } from '../engine/meta';
 
 const K_SETTINGS = 'st.settings.v1';
@@ -26,10 +26,11 @@ export function loadSettings(): Settings {
   const s = read<Partial<Settings>>(K_SETTINGS) ?? {};
   const old8 = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'POLUSDT', 'LINKUSDT'];
   const isOld8 = s.watchlist && s.watchlist.length === 8 && old8.every((x) => s.watchlist!.includes(x));
-  const watchlist = !s.watchlist || isOld8 || s.watchlist.length < 5 ? [...DEFAULT_SETTINGS.watchlist] : s.watchlist;
+  const raw = !s.watchlist || isOld8 || s.watchlist.length < 5 ? [...DEFAULT_SETTINGS.watchlist] : s.watchlist;
+  const watchlist = [...new Set(raw.map(normalizeSymbol))];
   return { ...DEFAULT_SETTINGS, ...s, watchlist, enabled: { ...DEFAULT_SETTINGS.enabled, ...(s.enabled ?? {}) }, tune: { ...DEFAULT_SETTINGS.tune, ...(s.tune ?? {}) } };
 }
-export const saveSettings = (s: Settings) => write(K_SETTINGS, s);
+export const saveSettings = (s: Settings) => write(K_SETTINGS, { ...s, watchlist: [...new Set(s.watchlist.map(normalizeSymbol))] });
 
 export const loadJournal = (): JournalEntry[] => read<JournalEntry[]>(K_JOURNAL) ?? [];
 export function saveJournal(j: JournalEntry[]) {

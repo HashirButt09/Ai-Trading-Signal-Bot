@@ -84,9 +84,28 @@ export interface Settings {
   editedAt: number; // when settings were last changed on this device (newer side wins when syncing)
 }
 
+export const SYMBOL_ALIASES: Record<string, string> = {
+  PEPEUSDT: '1000PEPEUSDT',
+  SHIBUSDT: '1000SHIBUSDT',
+  BONKUSDT: '1000BONKUSDT',
+  FLOKIUSDT: '1000FLOKIUSDT',
+  LUNCUSDT: '1000LUNCUSDT',
+  SATSUSDT: '1000SATSUSDT',
+  RATSUSDT: '1000RATSUSDT',
+  CATUSDT: '1000CATUSDT',
+  XECUSDT: '1000XECUSDT',
+  MOGUSDT: '1000000MOGUSDT',
+  BOBUSDT: '1000000BOBUSDT'
+};
+
+export function normalizeSymbol(sym: string): string {
+  const s = String(sym || '').trim().toUpperCase();
+  return SYMBOL_ALIASES[s] || s;
+}
+
 export const DEFAULT_WATCHLIST = [
   'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'POLUSDT', 'LINKUSDT',
-  'ADAUSDT', 'AVAXUSDT', 'SUIUSDT', 'NEARUSDT', 'APTUSDT', 'PEPEUSDT', 'SHIBUSDT', 'ARBUSDT',
+  'ADAUSDT', 'AVAXUSDT', 'SUIUSDT', 'NEARUSDT', 'APTUSDT', '1000PEPEUSDT', '1000SHIBUSDT', 'ARBUSDT',
   'OPUSDT', 'TIAUSDT', 'INJUSDT', 'RENDERUSDT', 'FETUSDT', 'FTMUSDT', 'WIFUSDT', 'AAVEUSDT',
   'UNIUSDT', 'LTCUSDT', 'BCHUSDT', 'DOTUSDT', 'FILUSDT', 'ATOMUSDT'
 ];

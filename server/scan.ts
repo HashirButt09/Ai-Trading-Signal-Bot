@@ -108,6 +108,7 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
     // fetch candles (4 pairs at a time to stay gentle on Binance)
     const data = new Map<string, { L: Candle[]; H: Candle[] }>();
     const queue = [...due];
+    const invalidSymbols: string[] = [];
     const worker = async () => {
       for (let sym = queue.shift(); sym; sym = queue.shift()) {
         try {
@@ -115,11 +116,21 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
           if (L.length > WARMUP && H.length > 60) data.set(sym, { L, H });
           else report.errors[sym] = 'not enough candle history';
         } catch (e: any) {
-          report.errors[sym] = String(e?.message ?? e).slice(0, 200);
+          const msg = String(e?.message ?? e).slice(0, 200);
+          if (msg.includes('Invalid symbol') || msg.includes('-1121')) {
+            invalidSymbols.push(sym);
+          } else {
+            report.errors[sym] = msg;
+          }
         }
       }
     };
     await Promise.all([worker(), worker(), worker(), worker()]);
+
+    if (invalidSymbols.length) {
+      settings.watchlist = settings.watchlist.filter((x) => !invalidSymbols.includes(x));
+      await d.kv.pipe(saveCmds({ settings }));
+    }
 
     let health = playbookHealth(journal, s);
     const ids = new Set(journal.map((e) => e.signal.id));
