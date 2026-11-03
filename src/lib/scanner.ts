@@ -282,33 +282,46 @@ export class Scanner {
     };
     await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);
     this.catchUp();
-    // Scan all loaded pairs immediately for any active setups formed on the latest closed candle
-    const candidateSetups: { sym: string; candle: Candle; pWin?: number; rr: number }[] = [];
+    // Scan all loaded pairs immediately for any active setups formed on the latest closed candle.
+    // Call onLtfClose for every pair's last candle (so open trades update),
+    // doing the ones with ACTIVE setups last, sorted best first.
+    const activeCandidates: { sym: string; candle: Candle; pWin?: number; rr: number }[] = [];
+    const otherPairs: { sym: string; candle: Candle }[] = [];
+
     for (const sym of syms) {
       const L = this.ltf.get(sym);
       const H = this.htf.get(sym);
-      if (L?.length && H?.length) {
-        const lastCandle = L[L.length - 1];
+      if (!L?.length) continue;
+      const lastCandle = L[L.length - 1];
+      let isActive = false;
+      if (H?.length) {
         const r = evaluate(sym, buildLtf(L), L.length - 1, buildHtf(H), this.settings);
         if (r.signal && !this.journal.some((e) => e.signal.id === r.signal!.id)) {
           const g = gate(r.signal, this.model, this.health, this.settings);
           r.signal.pWin = g.pWin;
           if (g.status === 'ACTIVE') {
-            candidateSetups.push({ sym, candle: lastCandle, pWin: g.pWin, rr: r.signal.rr });
-          } else {
-            this.onLtfClose(sym, lastCandle);
+            isActive = true;
+            activeCandidates.push({ sym, candle: lastCandle, pWin: g.pWin, rr: r.signal.rr });
           }
         }
       }
+      if (!isActive) {
+        otherPairs.push({ sym, candle: lastCandle });
+      }
     }
+
+    for (const item of otherPairs) {
+      this.onLtfClose(item.sym, item.candle);
+    }
+
     const isModelTrained = this.model && this.model.n >= this.settings.metaMinSamples && !this.model.off;
-    candidateSetups.sort((a, b) => {
+    activeCandidates.sort((a, b) => {
       if (isModelTrained) {
         return (b.pWin ?? 0) - (a.pWin ?? 0);
       }
       return b.rr - a.rr;
     });
-    for (const item of candidateSetups) {
+    for (const item of activeCandidates) {
       this.onLtfClose(item.sym, item.candle);
     }
     this.emit();

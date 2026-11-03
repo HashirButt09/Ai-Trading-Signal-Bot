@@ -184,7 +184,127 @@ const rb = await runScan(bad);
 ok(Object.keys(rb.errors).length === 2 && JSON.parse(mem.data.get(K.status)).lastError.includes('451'), 'Binance errors are recorded in status for the app to show');
 ok(!mem.data.has(K.lock), 'lock released after a failed tick');
 
-// ---- max open trades guard ----
+// ---- multi-coin isolation & max open trades tests ----
+
+// 1) Two coins at very different prices (100 and 0.2): each trade outcome depends only on its own candles
+{
+  const diffMem = memoryKv();
+  const diffKv = restKv('https://fake.upstash.io', 'tok', async (url: string, init: any) => {
+    const body = JSON.parse(init.body);
+    const result = url.endsWith('/pipeline') ? (await diffMem.pipe(body)).map((r) => ({ result: r })) : { result: await diffMem.cmd(...body) };
+    return { ok: true, status: 200, json: async () => result } as any;
+  });
+
+  const symHigh = 'BTCUSDT';
+  const symLow = 'DOGEUSDT';
+
+  const diffSettings = { ...DEFAULT_SETTINGS, watchlist: [symHigh, symLow] };
+  await diffMem.cmd('SET', K.settings, JSON.stringify(diffSettings));
+
+  // Use 1500 candles from market.AAAUSDT so H.length > 60 check in runScan passes
+  const highM5 = market.AAAUSDT.m5.slice(0, 1500).map((c) => ({ ...c }));
+  const lowM5 = market.AAAUSDT.m5.slice(0, 1500).map((c) => ({ ...c, o: c.o * 0.002, h: c.h * 0.002, l: c.l * 0.002, c: c.c * 0.002 }));
+
+  const candle1000 = highM5[1000];
+  const candle1001 = highM5[1001];
+
+  const pHigh = candle1000.c;
+  const pLow = candle1000.c * 0.002;
+
+  // At candle 1001: high moves up to pHigh * 1.15 (hits TP pHigh * 1.10), low moves slightly (remains open)
+  highM5[1001] = { t: candle1001.t, o: pHigh, h: pHigh * 1.15, l: pHigh * 0.99, c: pHigh * 1.14, v: 2000 };
+  lowM5[1001] = { t: candle1001.t, o: pLow, h: pLow * 1.02, l: pLow * 0.98, c: pLow * 1.01, v: 2000 };
+
+  const diffMarket: Record<string, { m5: Candle[]; h1: Candle[] }> = {
+    [symHigh]: { m5: highM5, h1: agg(highM5, 12) },
+    [symLow]: { m5: lowM5, h1: agg(lowM5, 12) }
+  };
+
+  const initialJournal: JournalEntry[] = [
+    {
+      signal: {
+        id: 'high-sig-1',
+        symbol: symHigh,
+        ltf: '5m',
+        time: candle1000.t,
+        type: 'LONG',
+        side: 'LONG',
+        playbook: 'TREND_EMA_PULLBACK',
+        strategy: 'TREND_EMA_PULLBACK',
+        entry: pHigh,
+        sl: pHigh * 0.90,
+        tp: pHigh * 1.10,
+        rr: 2,
+        leverage: 10,
+        marginUsd: 10,
+        notionalUsd: 100,
+        maxLossUsd: 2,
+        regime: 'trend',
+        reasons: ['test'],
+        tf: '5m',
+        timeframe: '5m',
+        indicatorSnap: {} as any
+      },
+      status: 'ACTIVE',
+      outcome: 'OPEN',
+      rNet: 0,
+      barsOpen: 0,
+      lastT: candle1000.t
+    },
+    {
+      signal: {
+        id: 'low-sig-1',
+        symbol: symLow,
+        ltf: '5m',
+        time: candle1000.t,
+        type: 'LONG',
+        side: 'LONG',
+        playbook: 'TREND_EMA_PULLBACK',
+        strategy: 'TREND_EMA_PULLBACK',
+        entry: pLow,
+        sl: pLow * 0.90,
+        tp: pLow * 1.10,
+        rr: 2,
+        leverage: 10,
+        marginUsd: 10,
+        notionalUsd: 100,
+        maxLossUsd: 2,
+        regime: 'trend',
+        reasons: ['test'],
+        tf: '5m',
+        timeframe: '5m',
+        indicatorSnap: {} as any
+      },
+      status: 'ACTIVE',
+      outcome: 'OPEN',
+      rNet: 0,
+      barsOpen: 0,
+      lastT: candle1000.t
+    }
+  ];
+  await diffMem.cmd('SET', K.journal, JSON.stringify(initialJournal));
+  await diffMem.cmd('SET', K.cursor, JSON.stringify({ [`${symHigh}|5m`]: candle1000.t, [`${symLow}|5m`]: candle1000.t }));
+
+  const diffNow = candle1001.t + S5;
+  const diffKlines = async (sym: string, interval: string, limit: number) => {
+    const src = interval === '5m' ? diffMarket[sym].m5 : diffMarket[sym].h1;
+    const step = TF_MS[interval];
+    return src.filter((c) => c.t + step <= diffNow).slice(-limit);
+  };
+
+  await runScan({ kv: diffKv, klines: diffKlines, send, now: () => diffNow });
+
+  const afterJournal = JSON.parse(diffMem.data.get(K.journal) ?? '[]') as JournalEntry[];
+  const highTrade = afterJournal.find((e) => e.signal.id === 'high-sig-1');
+  const lowTrade = afterJournal.find((e) => e.signal.id === 'low-sig-1');
+
+  ok(
+    highTrade?.outcome === 'WIN' && lowTrade?.outcome === 'OPEN',
+    'two coins at very different prices (100 and 0.2): each trade outcome depends only on its own candles'
+  );
+}
+
+// 2) With maxNewPerCandle = 1, 4 simultaneous setups give exactly 1 ACTIVE and 3 FILTERED
 {
   const guardMem = memoryKv();
   const guardKv = restKv('https://fake.upstash.io', 'tok', async (url: string, init: any) => {
@@ -195,7 +315,7 @@ ok(!mem.data.has(K.lock), 'lock released after a failed tick');
   const fourPairs = ['P1USDT', 'P2USDT', 'P3USDT', 'P4USDT'];
   const guardMarket: Record<string, { m5: Candle[]; h1: Candle[] }> = {};
   for (const p of fourPairs) guardMarket[p] = market.AAAUSDT;
-  const guardSettings = { ...DEFAULT_SETTINGS, watchlist: fourPairs, maxOpenTrades: 2, maxNewPerCandle: 2 };
+  const guardSettings = { ...DEFAULT_SETTINGS, watchlist: fourPairs, maxOpenTrades: 5, maxNewPerCandle: 1 };
   await guardMem.cmd('SET', K.settings, JSON.stringify(guardSettings));
 
   const targetSignalTime = bt.trades[0].entry.signal.time;
@@ -214,9 +334,77 @@ ok(!mem.data.has(K.lock), 'lock released after a failed tick');
   ok(
     rep.processed.length === 4 &&
       guardJournal.length === 4 &&
-      activeOpens.length <= 2 &&
-      filteredOpens.length >= 2,
-    `4 simultaneous setups produce at most 2 open ACTIVE trades (${activeOpens.length} active, ${filteredOpens.length} filtered)`
+      activeOpens.length === 1 &&
+      filteredOpens.length === 3,
+    'with maxNewPerCandle = 1, 4 simultaneous setups give exactly 1 ACTIVE and 3 FILTERED'
+  );
+}
+
+// 3) A FILTERED open trade on coin A must not stop a new setup on coin B
+{
+  const testCMem = memoryKv();
+  const testCKv = restKv('https://fake.upstash.io', 'tok', async (url: string, init: any) => {
+    const body = JSON.parse(init.body);
+    const result = url.endsWith('/pipeline') ? (await testCMem.pipe(body)).map((r) => ({ result: r })) : { result: await testCMem.cmd(...body) };
+    return { ok: true, status: 200, json: async () => result } as any;
+  });
+
+  const cSettings = { ...DEFAULT_SETTINGS, watchlist: ['AAAUSDT', 'BBBUSDT'], maxOpenTrades: 2, maxNewPerCandle: 1 };
+  await testCMem.cmd('SET', K.settings, JSON.stringify(cSettings));
+
+  const targetSignalTime = bt.trades[0].entry.signal.time;
+  const cNow = targetSignalTime + S5;
+
+  // Coin A has an existing FILTERED open trade with wide stop loss so it stays OPEN
+  const initialJournal: JournalEntry[] = [
+    {
+      signal: {
+        id: 'filtered-trade-aaa',
+        symbol: 'AAAUSDT',
+        ltf: '5m',
+        time: targetSignalTime,
+        type: 'LONG',
+        side: 'LONG',
+        playbook: 'TREND_EMA_PULLBACK',
+        strategy: 'TREND_EMA_PULLBACK',
+        entry: 100,
+        sl: 1,
+        tp: 10000,
+        rr: 2,
+        leverage: 10,
+        marginUsd: 10,
+        notionalUsd: 100,
+        maxLossUsd: 2,
+        regime: 'trend',
+        reasons: ['filtered'],
+        tf: '5m',
+        timeframe: '5m',
+        indicatorSnap: {} as any
+      },
+      status: 'FILTERED',
+      outcome: 'OPEN',
+      rNet: 0,
+      barsOpen: 1,
+      lastT: targetSignalTime
+    }
+  ];
+  await testCMem.cmd('SET', K.journal, JSON.stringify(initialJournal));
+  // Cursor for AAA is at targetSignalTime, BBB has no cursor so it checks the latest candle
+  await testCMem.cmd('SET', K.cursor, JSON.stringify({ 'AAAUSDT|5m': targetSignalTime }));
+
+  const cKlines = async (sym: string, interval: string, limit: number) => {
+    const src = interval === '5m' ? market.AAAUSDT.m5 : market.AAAUSDT.h1;
+    const step = TF_MS[interval];
+    return src.filter((c) => c.t + step <= cNow).slice(-limit);
+  };
+
+  await runScan({ kv: testCKv, klines: cKlines, send, now: () => cNow });
+
+  const jAfter = JSON.parse(testCMem.data.get(K.journal) ?? '[]') as JournalEntry[];
+  const bbbTrade = jAfter.find((e) => e.signal.symbol === 'BBBUSDT' && e.signal.time === targetSignalTime);
+  ok(
+    bbbTrade && bbbTrade.status === 'ACTIVE' && bbbTrade.outcome === 'OPEN',
+    'a FILTERED open trade on coin A must not stop a new setup on coin B'
   );
 }
 

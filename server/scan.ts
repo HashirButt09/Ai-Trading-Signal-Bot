@@ -180,7 +180,7 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
         const k = L[i];
         let nRes = 0;
         journal = journal.map((e) => {
-          if (!isOpen(e)) return e;
+          if (e.signal.symbol !== sym || e.outcome !== 'OPEN' || e.signal.ltf !== s.ltf) return e;
           const n = advanceEntry(e, k, s);
           if (n.outcome !== 'OPEN') nRes++;
           return n;
@@ -226,7 +226,7 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
 
         let nRes = 0;
         journal = journal.map((e) => {
-          if (!isOpen(e)) return e;
+          if (e.signal.symbol !== sym || e.outcome !== 'OPEN' || e.signal.ltf !== s.ltf) return e;
           const n = advanceEntry(e, k, s);
           if (n.outcome !== 'OPEN') nRes++;
           return n;
@@ -237,7 +237,8 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
         }
 
         if (i < WARMUP) continue;
-        if (journal.some(isOpen)) continue; // one position per pair at a time
+        // one position per pair at a time (any status, ACTIVE or FILTERED on the same coin)
+        if (journal.some((e) => e.signal.symbol === sym && e.outcome === 'OPEN' && e.signal.ltf === s.ltf)) continue;
 
         const r = evaluate(sym, item.lctx, i, item.hctx, s);
         if (!r.signal || ids.has(r.signal.id)) continue;
