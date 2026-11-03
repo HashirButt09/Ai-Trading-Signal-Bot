@@ -9,6 +9,7 @@ export interface ServerStatus {
   lastSignalAt: number;
   settingsAt?: number;
   settingsBy?: 'app' | 'agent' | '';
+  profiles?: Record<string, { lastScan: number; lastError: string }>;
 }
 
 export interface StateResponse {
@@ -20,6 +21,7 @@ export interface StateResponse {
   publicKey: string;
   cron: boolean;
   unchanged?: boolean;
+  profile?: string;
   settings?: Settings;
   journal?: JournalEntry[];
   model?: MetaModel | null;
@@ -49,7 +51,13 @@ async function call<T>(path: string, passcode: string, init?: { method?: string;
   return j as T;
 }
 
-export const getState = (passcode: string, ver?: number) => call<StateResponse>(`/api/state${ver !== undefined && ver >= 0 ? `?ver=${ver}` : ''}`, passcode);
+export const getState = (passcode: string, ver?: number, profile?: string) => {
+  const q = new URLSearchParams();
+  if (ver !== undefined && ver >= 0) q.set('ver', String(ver));
+  if (profile && profile !== 'main') q.set('profile', profile);
+  const qs = q.toString();
+  return call<StateResponse>(`/api/state${qs ? `?${qs}` : ''}`, passcode);
+};
 
 export const postState = <T = { ok: boolean; ver: number }>(passcode: string, body: Record<string, unknown>) =>
   call<T>('/api/state', passcode, { method: 'POST', body });
@@ -62,10 +70,15 @@ export function serverSettings(s: Settings): Partial<Settings> {
   const { reviewPasscode, useServer, pushPairs, notifySound, notifyBrowser, reviewNews, editedAt, ...rest } = s;
   return rest;
 }
-export const agentGet = (passcode: string) => call<any>('/api/agent', passcode);
-export const agentPost = (passcode: string, action: 'run' | 'undo' | 'resume') => call<any>('/api/agent', passcode, { method: 'POST', body: { action } });
+export const agentGet = (passcode: string, profile = 'main') => call<any>(`/api/agent${profile !== 'main' ? `?profile=${encodeURIComponent(profile)}` : ''}`, passcode);
+export const agentPost = (passcode: string, action: 'run' | 'undo' | 'resume', profile = 'main') => call<any>('/api/agent', passcode, { method: 'POST', body: { action, profile } });
 
+// null and missing fields are the same thing (the server stores "not tuned yet" as null)
 const stable = (v: unknown): unknown =>
-  Array.isArray(v) ? v.map(stable) : v && typeof v === 'object' ? Object.keys(v as object).sort().map((k) => [k, stable((v as any)[k])]) : v;
+  Array.isArray(v)
+    ? v.map(stable)
+    : v && typeof v === 'object'
+      ? Object.keys(v as object).filter((k) => (v as any)[k] !== null && (v as any)[k] !== undefined).sort().map((k) => [k, stable((v as any)[k])])
+      : v;
 /** order-independent fingerprint of the settings the server cares about */
 export const settingsKey = (s: Partial<Settings>) => JSON.stringify(stable(serverSettings({ ...(s as Settings) })));

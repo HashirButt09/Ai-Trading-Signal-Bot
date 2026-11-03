@@ -20,6 +20,9 @@ import { SignalCard } from './components/SignalCard';
 import { Backtest } from './components/Backtest';
 import { Journal } from './components/Journal';
 import { Settings as SettingsPage } from './components/Settings';
+import { BotSwitch, Compare } from './components/Compare';
+import { useProfiles } from './lib/useProfiles';
+import { MAIN } from './engine/profiles';
 
 type Tab = 'live' | 'trades' | 'journal' | 'learn' | 'backtest' | 'settings';
 const TAB_LABEL: Record<Tab, string> = { live: 'Live', trades: 'Trades', journal: 'AI & journal', learn: 'Learn', backtest: 'Backtest', settings: 'Settings' };
@@ -29,6 +32,10 @@ export default function App() {
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const scanner = useScanner(settings);
+  // which timeframe bot the screens show (main 5m / 1h, or the 15m / 4h bot from the server)
+  const prof = useProfiles(scanner, settings);
+  const vs = prof.view;
+  const vset = vs.settings;
   const [tab, setTab] = useState<Tab>(() => (new URLSearchParams(location.search).get('tab') === 'agent' ? 'journal' : 'live'));
   const [symbol, setSymbol] = useState(settings.watchlist[0] ?? 'BTCUSDT');
   const [tfSel, setTfSel] = useState<'ltf' | 'htf'>('ltf');
@@ -96,7 +103,16 @@ export default function App() {
   }, [scanner]);
   useEffect(() => {
     if (!wantSig) return;
-    const e = scanner.journal.find((x) => x.signal.id === wantSig);
+    let e = scanner.journal.find((x) => x.signal.id === wantSig);
+    if (e) prof.setView(MAIN);
+    else
+      for (const [id, v] of prof.views) {
+        e = v.journal.find((x) => x.signal.id === wantSig);
+        if (e) {
+          prof.setView(id);
+          break;
+        }
+      }
     if (!e) return;
     setTab('live');
     setSymbol(e.signal.symbol);
@@ -104,7 +120,7 @@ export default function App() {
     setTfSel('ltf');
     setWantSig(null);
     if (location.search) history.replaceState(null, '', '/');
-  }, [wantSig, scanner.version]);
+  }, [wantSig, scanner.version, vs.version]);
 
   const [learnId, setLearnId] = useState<string | null>(null);
   const [inds, setInds] = useState<ActiveIndicator[]>(loadIndicators);
@@ -119,7 +135,7 @@ export default function App() {
     setSelId(e.signal.id);
     // chart patterns are shown on the timeframe they were read on; older trades also need the longer history
     const old = Date.now() - e.signal.time > 30 * 60 * 60 * 1000;
-    setTfSel(e.signal.patternTf === settings.htf || old ? 'htf' : 'ltf');
+    setTfSel(e.signal.patternTf === vset.htf || old ? 'htf' : 'ltf');
     window.scrollTo(0, 0);
   };
   const openLearn = (id: string) => {
@@ -128,8 +144,12 @@ export default function App() {
     window.scrollTo(0, 0);
   };
 
-  const active = useMemo(() => scanner.journal.filter((e) => e.status === 'ACTIVE' && !e.seed), [scanner.version]);
+  const active = useMemo(() => vs.journal.filter((e) => e.status === 'ACTIVE' && !e.seed), [vs.version, prof.viewId]);
   const prevCount = useRef(active.length);
+  useEffect(() => {
+    prevCount.current = active.length; // switching bots is not a new signal
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prof.viewId]);
   useEffect(() => {
     if (active.length > prevCount.current) {
       const n = active[active.length - 1];
@@ -140,12 +160,14 @@ export default function App() {
     prevCount.current = active.length;
   }, [active.length]);
 
-  const interval = tfSel === 'ltf' ? settings.ltf : settings.htf;
+  const interval = tfSel === 'ltf' ? vset.ltf : vset.htf;
   const scanned = settings.watchlist.includes(symbol);
-  const extra = useExtraSeries(symbol, interval, !scanned);
-  const candles = scanned ? scanner.series(symbol, interval) : extra.candles;
-  const symEntries = scanner.journal.filter((e) => e.signal.symbol === symbol && !e.seed);
-  const selected = scanner.journal.find((e) => e.signal.id === selId) ?? null;
+  // the live scanner streams the main bot's timeframes; other timeframes are loaded for the chart
+  const streamed = scanned && (interval === settings.ltf || interval === settings.htf);
+  const extra = useExtraSeries(symbol, interval, !streamed);
+  const candles = streamed ? scanner.series(symbol, interval) : extra.candles;
+  const symEntries = vs.journal.filter((e) => e.signal.symbol === symbol && !e.seed);
+  const selected = vs.journal.find((e) => e.signal.id === selId) ?? null;
   const feed = [...active].reverse().slice(0, 30);
 
   const counts = { bull: 0, bear: 0, range: 0, chop: 0 };
@@ -164,7 +186,7 @@ export default function App() {
       <header>
         <div className="row gap">
           <strong className="brand">Signal Terminal</strong>
-          <span className="muted small hide-m">{settings.htf} regime · {settings.ltf} execution · ${settings.maxLossUsd} max loss</span>
+          <span className="muted small hide-m">{vset.htf} regime · {vset.ltf} execution · ${settings.maxLossUsd} max loss</span>
         </div>
         <nav>
           {(Object.keys(TAB_LABEL) as Tab[]).map((t) => (
@@ -192,6 +214,9 @@ export default function App() {
         </div>
       )}
       {srv.mode === 'on' && srv.info?.status.lastError && <div className="banner">Server scan problem: {srv.info.status.lastError}</div>}
+      {(tab === 'live' || tab === 'trades' || tab === 'journal') && (
+        <BotSwitch bots={prof.bots} value={prof.viewId} onChange={(id) => { prof.setView(id); setSelId(null); setTfSel('ltf'); }} />
+      )}
 
       {tab === 'live' && (
         <main className="live">
@@ -224,8 +249,8 @@ export default function App() {
                   Indicators{inds.length ? ` (${inds.length})` : ''}
                 </button>
                 <div className="seg">
-                  <button className={tfSel === 'ltf' ? 'on' : ''} onClick={() => setTfSel('ltf')}>{settings.ltf}</button>
-                  <button className={tfSel === 'htf' ? 'on' : ''} onClick={() => setTfSel('htf')}>{settings.htf}</button>
+                  <button className={tfSel === 'ltf' ? 'on' : ''} onClick={() => setTfSel('ltf')}>{vset.ltf}</button>
+                  <button className={tfSel === 'htf' ? 'on' : ''} onClick={() => setTfSel('htf')}>{vset.htf}</button>
                 </div>
               </div>
             </div>
@@ -242,9 +267,9 @@ export default function App() {
               {candles.length === 0 && <div className="overlay muted">Loading {symbol}…</div>}
               <Chart symbol={symbol} interval={interval} candles={candles} entries={symEntries} selected={selected} indicators={inds} onEditIndicator={(id) => setIndMenu({ focus: id })} />
             </div>
-            {selected ? <SignalCard entry={selected} selected full review={{ settings, health: scanner.health }} /> : (
+            {selected ? <SignalCard entry={selected} selected full review={{ settings: vset, health: vs.health }} /> : (
               <div className="card muted small">
-                Waiting for a confirmed setup. Signals only fire on a <b>closed</b> {settings.ltf} candle, and only for the playbook that matches the current {settings.htf} regime. Select a signal from the list to see its levels and reasoning.
+                Waiting for a confirmed setup. Signals only fire on a <b>closed</b> {vset.ltf} candle, and only for the playbook that matches the current {vset.htf} regime. Select a signal from the list to see its levels and reasoning.
               </div>
             )}
           </section>
@@ -258,13 +283,20 @@ export default function App() {
           </section>
         </main>
       )}
-      {tab === 'backtest' && <Backtest scanner={scanner} />}
-      {tab === 'trades' && <Trades scanner={scanner} settings={settings} onShow={showTrade} onLearn={openLearn} />}
+      {tab === 'backtest' && <Backtest scanner={scanner} onImport={(id, entries) => (id === MAIN ? scanner.importTrades(entries) : void prof.feedOf(id)?.action({ action: 'import', entries, seed: true }))} />}
+      {tab === 'trades' && <Trades scanner={vs} settings={vset} onShow={showTrade} onLearn={openLearn} />}
       {tab === 'learn' && <Learn focus={learnId} onFocus={setLearnId} />}
       {tab === 'journal' && (
         <>
-          <Agent scanner={scanner} settings={settings} onChange={update} />
-          <Journal scanner={scanner} />
+          <Compare
+            bots={prof.bots}
+            current={prof.viewId}
+            onPick={(id) => prof.setView(id)}
+            viewOfBot={(id) => (id === MAIN ? scanner : prof.views.get(id) ?? scanner)}
+            lastScan={(id) => (id === MAIN ? srv.info?.status.lastScan ?? 0 : srv.info?.status.profiles?.[id]?.lastScan ?? 0)}
+          />
+          <Agent scanner={vs} settings={settings} onChange={update} />
+          <Journal scanner={vs} />
         </>
       )}
       {tab === 'settings' && <SettingsPage value={settings} onChange={update} scanner={scanner} />}

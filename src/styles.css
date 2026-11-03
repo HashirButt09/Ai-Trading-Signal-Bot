@@ -202,3 +202,8 @@ table.pairs tbody tr:hover, table.pairs tbody tr.sel { background: var(--panel2)
 .notes img { width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--line); background: #fff; display: block; }
 .notecheck { background: #f0b90b14; border: 1px solid #f0b90b50; color: #f5d77a; border-radius: 8px; padding: 8px 10px; margin: 4px 0 6px; line-height: 1.5; }
 .botrule { margin-top: 14px; background: #5b8def14; border: 1px solid #5b8def55; border-radius: 10px; padding: 10px 12px; }
+
+/* which timeframe bot is shown (5m / 1h or 15m / 4h) */
+.botswitch { padding: 10px 16px 0; align-items: center; }
+.botswitch .seg button { text-transform: none; }
+tr.sel td { background: var(--panel2); }

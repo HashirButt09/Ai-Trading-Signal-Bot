@@ -1,4 +1,4 @@
-import { parseIgnoreBefore, type JournalEntry, type Settings } from './types.js';
+import { isIgnored, type JournalEntry, type Settings } from './types.js';
 import { resolved } from './journal.js';
 
 export const WEEK_MS = 7 * 86_400_000;
@@ -166,10 +166,8 @@ export function computeProgress(
   settings?: Partial<Settings>,
   now = Date.now()
 ): ProgressReport {
-  const ignoreBefore = parseIgnoreBefore(settings?.ignoreBefore);
-
-  // Resolved trades only, by resolve time, excluding trades resolved before ignoreBefore
-  const validResolved = resolved(journal).filter((e) => rt(e) >= ignoreBefore);
+  // Resolved trades only, by resolve time, without the trades excluded in Settings (ignore window)
+  const validResolved = resolved(journal).filter((e) => !isIgnored(e, settings));
 
   const weeks: WeekProgress[] = [];
 

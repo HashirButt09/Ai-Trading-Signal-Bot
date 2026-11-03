@@ -1,7 +1,7 @@
 import { computeProgress, computeVerdict, computeWeeklySummary, WEEK_MS } from '../src/engine/progress.js';
 import { trainingSet, playbookHealth } from '../src/engine/journal.js';
 import { retrainGated, liveAccuracy } from '../src/engine/learner.js';
-import { BUG_DEPLOY_TIME, DEFAULT_SETTINGS, parseIgnoreBefore, type JournalEntry, type Settings, type Signal } from '../src/engine/types.js';
+import { BUG_DEPLOY_TIME, BUG_WINDOW_FROM, BUG_WINDOW_TO, DEFAULT_SETTINGS, isIgnored, migrateSettings, parseIgnoreBefore, type JournalEntry, type Settings, type Signal } from '../src/engine/types.js';
 
 let fails = 0;
 function ok(cond: boolean, msg: string) {
@@ -253,9 +253,39 @@ function fakeTrade(
   const totalInProg = prog.weeks.reduce((sum, w) => sum + w.active.trades + w.filtered.trades, 0);
   ok(totalInProg === 45, `computeProgress excluded all 50 pre-cutoff trades (${totalInProg} == 45)`);
 
-  // F) DEFAULT_SETTINGS defaults ignoreBefore to BUG_DEPLOY_TIME
-  ok(DEFAULT_SETTINGS.ignoreBefore === BUG_DEPLOY_TIME, `DEFAULT_SETTINGS.ignoreBefore is 1793694732000 (${DEFAULT_SETTINGS.ignoreBefore})`);
-  ok(parseIgnoreBefore(undefined) === BUG_DEPLOY_TIME, 'parseIgnoreBefore(undefined) returns BUG_DEPLOY_TIME');
+  // F) no blanket cut-off by default any more; the default is the bug window
+  ok(DEFAULT_SETTINGS.ignoreBefore === 0, `DEFAULT_SETTINGS.ignoreBefore is off (${DEFAULT_SETTINGS.ignoreBefore})`);
+  ok(parseIgnoreBefore(undefined) === 0, 'parseIgnoreBefore(undefined) returns 0 (off)');
+}
+
+// ----------------------------------------------------
+// 8b) Ignore WINDOW: only trades open or closed during the bug are skipped
+// ----------------------------------------------------
+{
+  const S: Settings = { ...DEFAULT_SETTINGS };
+  const H = 3600_000;
+  const before = fakeTrade('before', BUG_WINDOW_FROM - 30 * H, 'ACTIVE', 1); // closed long before the bug
+  const inside = fakeTrade('inside', BUG_WINDOW_FROM + 2 * H, 'ACTIVE', -1); // opened and closed in the window
+  const straddle = { ...fakeTrade('straddle', BUG_WINDOW_FROM - 2 * H, 'ACTIVE', -1), resolvedAt: BUG_WINDOW_FROM + H }; // open while the bug ran
+  const after = fakeTrade('after', BUG_WINDOW_TO + 2 * H, 'ACTIVE', 1);
+  ok(!isIgnored(before, S), 'trade before the bug window is kept');
+  ok(isIgnored(inside, S), 'trade inside the bug window is skipped');
+  ok(isIgnored(straddle, S), 'trade that was open during the bug window is skipped');
+  ok(!isIgnored(after, S), 'trade after the bug window is kept');
+  ok(!isIgnored(inside, { ...S, ignoreFrom: 0, ignoreTo: 0 }), 'clearing the window keeps every trade');
+
+  // learning uses the history before the window
+  const list: JournalEntry[] = [];
+  for (let i = 0; i < 60; i++) list.push(fakeTrade(`b${i}`, BUG_WINDOW_FROM - (70 - i) * H, 'ACTIVE', i % 2 ? 1 : -1));
+  for (let i = 0; i < 8; i++) list.push(fakeTrade(`w${i}`, BUG_WINDOW_FROM + i * H, 'ACTIVE', -1));
+  const train = trainingSet(list, S);
+  ok(train.length === 60 && train.every((e) => e.signal.id.startsWith('b')), `trades before the window still train (${train.length}/60), bug trades excluded`);
+
+  // migration from the old blanket cut-off
+  const m = migrateSettings({ ignoreBefore: BUG_DEPLOY_TIME } as Partial<Settings>);
+  ok(m.ignoreBefore === 0 && m.ignoreFrom === BUG_WINDOW_FROM && m.ignoreTo === BUG_WINDOW_TO, 'old "ignore before" value migrates to the bug window');
+  const keep = migrateSettings({ ignoreFrom: 0, ignoreTo: 0 } as Partial<Settings>);
+  ok(keep.ignoreFrom === 0 && keep.ignoreTo === 0, 'a cleared window stays cleared');
 }
 
 // ----------------------------------------------------

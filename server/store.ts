@@ -1,6 +1,7 @@
-import { DEFAULT_SETTINGS, normalizeSymbol, type JournalEntry, type Settings } from '../src/engine/types.js';
+import { DEFAULT_SETTINGS, migrateSettings, normalizeSymbol, type JournalEntry, type Settings } from '../src/engine/types.js';
 import type { MetaModel } from '../src/engine/meta.js';
 import type { Kv } from './kv.js';
+import { cleanProfiles, MAIN, pkey } from '../src/engine/profiles.js';
 
 export const K = {
   settings: 'st:settings',
@@ -15,6 +16,14 @@ export const K = {
   agentLock: 'st:agentlock'
 };
 
+/** per-profile storage keys (the main bot keeps the original ones) */
+export const PK = (id: string = MAIN) => ({ journal: pkey(K.journal, id), model: pkey(K.model, id), cursor: pkey(K.cursor, id), agent: pkey(K.agent, id) });
+
+export interface ProfileStatus {
+  lastScan: number;
+  lastError: string;
+}
+
 export interface ServerStatus {
   ver: number; // bumps whenever journal/model/settings change, so the app only downloads them when needed
   lastScan: number; // time of the last run that processed new candles
@@ -23,6 +32,7 @@ export interface ServerStatus {
   lastSignalAt: number;
   settingsAt: number; // when settings last changed on the server
   settingsBy: 'app' | 'agent' | '';
+  profiles?: Record<string, ProfileStatus>; // scan health of the extra timeframe bots
 }
 
 export const EMPTY_STATUS: ServerStatus = { ver: 0, lastScan: 0, lastError: '', errors: {}, lastSignalAt: 0, settingsAt: 0, settingsBy: '' };
@@ -41,14 +51,18 @@ const parse = <T>(v: unknown, fallback: T): T => {
 
 /** Fields the server must never store (secrets that belong only to the browser). */
 export function cleanSettings(s: Partial<Settings>): Settings {
+  s = migrateSettings(s ?? {});
   const m = { ...DEFAULT_SETTINGS, ...s, enabled: { ...DEFAULT_SETTINGS.enabled, ...(s.enabled ?? {}) }, tune: { ...DEFAULT_SETTINGS.tune, ...(s.tune ?? {}) } } as Settings;
   m.reviewPasscode = '';
+  m.profiles = cleanProfiles(m.profiles, m.ltf);
   m.watchlist = [...new Set((m.watchlist ?? []).map((x) => normalizeSymbol(String(x))).filter((x) => /^[A-Z0-9]{2,20}$/.test(x)))].slice(0, 100);
   return m;
 }
 
-export async function loadAll(kv: Kv) {
-  const [s, j, m, c, st] = await kv.pipe([['GET', K.settings], ['GET', K.journal], ['GET', K.model], ['GET', K.cursor], ['GET', K.status]]);
+/** shared settings + status, and the journal / model / cursor of one profile (default: the main bot) */
+export async function loadAll(kv: Kv, profile: string = MAIN) {
+  const k = PK(profile);
+  const [s, j, m, c, st] = await kv.pipe([['GET', K.settings], ['GET', k.journal], ['GET', k.model], ['GET', k.cursor], ['GET', K.status]]);
   return {
     settings: cleanSettings(parse<Partial<Settings>>(s, {})),
     journal: parse<JournalEntry[]>(j, []),
@@ -77,12 +91,13 @@ export function trimJournal(j: JournalEntry[]): JournalEntry[] {
   return out;
 }
 
-export function saveCmds(p: { journal?: JournalEntry[]; model?: MetaModel | null; settings?: Settings; cursor?: Record<string, number>; status?: ServerStatus }) {
+export function saveCmds(p: { journal?: JournalEntry[]; model?: MetaModel | null; settings?: Settings; cursor?: Record<string, number>; status?: ServerStatus; profile?: string }) {
   const cmds: (string | number)[][] = [];
-  if (p.journal) cmds.push(['SET', K.journal, JSON.stringify(trimJournal(p.journal))]);
-  if (p.model !== undefined) cmds.push(p.model ? ['SET', K.model, JSON.stringify(p.model)] : ['DEL', K.model]);
+  const k = PK(p.profile);
+  if (p.journal) cmds.push(['SET', k.journal, JSON.stringify(trimJournal(p.journal))]);
+  if (p.model !== undefined) cmds.push(p.model ? ['SET', k.model, JSON.stringify(p.model)] : ['DEL', k.model]);
   if (p.settings) cmds.push(['SET', K.settings, JSON.stringify(p.settings)]);
-  if (p.cursor) cmds.push(['SET', K.cursor, JSON.stringify(p.cursor)]);
+  if (p.cursor) cmds.push(['SET', k.cursor, JSON.stringify(p.cursor)]);
   if (p.status) cmds.push(['SET', K.status, JSON.stringify(p.status)]);
   return cmds;
 }

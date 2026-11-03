@@ -15,14 +15,15 @@
  *  7. Plateau: if 5 runs in a row find nothing better, or 2 adopted changes in a row did not raise
  *     live accuracy, the agent pauses itself and notifies you. "Resume" (or Run now) restarts it.
  */
-import { ALL_STRATEGIES, DEFAULT_TUNE, STRATEGY_LABEL, parseIgnoreBefore, type Candle, type JournalEntry, type Settings, type StrategyId, type Tune } from '../src/engine/types.js';
+import { ALL_STRATEGIES, DEFAULT_TUNE, STRATEGY_LABEL, isIgnored, type Candle, type JournalEntry, type Settings, type StrategyId, type Tune } from '../src/engine/types.js';
 import { runBacktest, type BtTrade } from '../src/engine/backtest.js';
 import { computeStats, resolved, toSamples, type Stats } from '../src/engine/journal.js';
 import { predictMeta, trainMeta } from '../src/engine/meta.js';
 import { TF_MS } from '../src/engine/time.js';
 import { computeProgress, computeWeeklySummary } from '../src/engine/progress.js';
 import type { Kv } from './kv.js';
-import { K, loadAll, saveCmds } from './store.js';
+import { K, loadAll, PK, saveCmds } from './store.js';
+import { MAIN, profileLabel, settingsFor, withTuned } from '../src/engine/profiles.js';
 import { acquireLock, releaseLock } from './scan.js';
 import { listSubs, type Sender } from './push.js';
 import type { GeminiJson } from './gemini.js';
@@ -256,8 +257,8 @@ export function liveAcc(journal: JournalEntry[], from: number, to = Infinity): A
   return { n: st.n, winRate: +st.winRate.toFixed(3), avgR: +st.avgR.toFixed(3) };
 }
 
-export async function loadAgent(kv: Kv): Promise<AgentState> {
-  const raw = await kv.cmd('GET', K.agent);
+export async function loadAgent(kv: Kv, profile: string = MAIN): Promise<AgentState> {
+  const raw = await kv.cmd('GET', PK(profile).agent);
   let state: AgentState;
   try {
     state = raw ? { ...EMPTY_AGENT, ...JSON.parse(raw) } : { ...EMPTY_AGENT };
@@ -298,21 +299,22 @@ Every proposal will be backtested on data you have NOT seen; only a proposal tha
 Prefer small, well-reasoned changes tied to the numbers. Small samples (n<20) are weak evidence: say so.
 Reply with JSON only: {"analysis": "<=4 short sentences", "candidates": [{"changes": {"key": value}, "why": "one sentence"}]} with 1 to 3 candidates.`;
 
-async function notify(kv: Kv, send: Sender | undefined, title: string, body: string) {
+async function notify(kv: Kv, send: Sender | undefined, title: string, body: string, tag = '') {
   if (!send) return;
+  if (tag) title = `[${tag}] ${title}`;
   const subs = await listSubs(kv);
   await Promise.all([...subs.values()].map((r) => send(r.sub, { title, body, tag: `agent-${Date.now()}`, url: '/?tab=agent' }).catch(() => 'x')));
 }
 
 const fmtChange = (c: Change) => (typeof c.to === 'boolean' ? `${c.label} ${c.to ? 'ON' : 'OFF'}` : `${c.label} ${c.from}→${c.to}`);
 
-async function saveSettings(kv: Kv, settings: Settings, now: number) {
+async function saveSettings(kv: Kv, settings: Settings, now: number, profile: string = MAIN) {
   const lock = await acquireLock(kv, 30, 20_000);
   if (!lock) throw new Error('scanner busy, could not save settings');
   try {
     const st = await loadAll(kv);
-    // keep anything the app changed meanwhile except the tuned values
-    const merged = applyParams(st.settings, paramsOf(settings));
+    // keep anything the app changed meanwhile except the tuned values (an extra profile keeps its own copy)
+    const merged = withTuned(st.settings, profile, paramsOf(settings));
     await kv.pipe(saveCmds({ settings: merged, status: { ...st.status, ver: st.status.ver + 1, settingsAt: now, settingsBy: 'agent' } }));
   } finally {
     await releaseLock(kv, lock);
@@ -324,45 +326,48 @@ function pushRun(state: AgentState, run: AgentRun) {
 }
 
 /** Restart a paused agent (from the app). */
-export async function resumeAgent(kv: Kv, now = Date.now()): Promise<AgentRun> {
-  const state = await loadAgent(kv);
+export async function resumeAgent(kv: Kv, now = Date.now(), profile: string = MAIN): Promise<AgentRun> {
+  const state = await loadAgent(kv, profile);
   const run: AgentRun = { at: now, trigger: 'manual', decision: 'resumed', summary: state.paused ? 'Resumed by you. The agent will keep looking for improvements.' : 'Agent was already running.', notes: [] };
   state.paused = null;
   state.keptStreak = 0;
   state.noGain = 0;
   pushRun(state, run);
-  await kv.cmd('SET', K.agent, JSON.stringify(state));
+  await kv.cmd('SET', PK(profile).agent, JSON.stringify(state));
   return run;
 }
 
 /** Undo the last change on request from the app. */
-export async function undoLast(kv: Kv, now = Date.now()): Promise<AgentRun> {
-  const state = await loadAgent(kv);
+export async function undoLast(kv: Kv, now = Date.now(), profile: string = MAIN): Promise<AgentRun> {
+  const state = await loadAgent(kv, profile);
   const lc = state.lastChange;
   if (!lc) throw new Error('There is no agent change to undo.');
-  const { settings } = await loadAll(kv);
-  await saveSettings(kv, applyParams(settings, lc.prev), now);
+  const { settings: shared } = await loadAll(kv);
+  await saveSettings(kv, applyParams(settingsFor(shared, profile), lc.prev), now, profile);
   const run: AgentRun = { at: now, trigger: 'manual', decision: 'undone', summary: `Undid: ${lc.changes.map(fmtChange).join(', ')}`, changes: diffParams(lc.next, lc.prev), notes: [] };
   state.lastChange = null;
   pushRun(state, run);
-  await kv.cmd('SET', K.agent, JSON.stringify(state));
+  await kv.cmd('SET', PK(profile).agent, JSON.stringify(state));
   return run;
 }
 
-export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'): Promise<AgentRun> {
+export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron', profile: string = MAIN): Promise<AgentRun> {
   const now = (d.now ?? Date.now)();
   const started = Date.now();
   const budget = d.budgetMs ?? 40_000;
   const days = d.days ?? 30;
   const notes: string[] = [];
-  const state = await loadAgent(d.kv);
-  const { settings, journal } = await loadAll(d.kv);
-  const ignoreBefore = parseIgnoreBefore(settings.ignoreBefore);
-  const validJournal = journal.filter((e) => (e.resolvedAt ?? e.signal.time) >= ignoreBefore);
+  const state = await loadAgent(d.kv, profile);
+  const { settings: shared, journal } = await loadAll(d.kv, profile);
+  // this profile's own timeframes and tuned values; risk, pairs and floors are shared
+  const settings = settingsFor(shared, profile);
+  const tag = profile === MAIN ? '' : profileLabel(shared, profile);
+  const say = (title: string, body: string) => notify(d.kv, d.send, title, body, tag);
+  const validJournal = journal.filter((e) => !isIgnored(e, settings));
   const cur = paramsOf(settings);
   const finish = async (run: AgentRun) => {
     pushRun(state, run);
-    await d.kv.cmd('SET', K.agent, JSON.stringify(state));
+    await d.kv.cmd('SET', PK(profile).agent, JSON.stringify(state));
     return run;
   };
 
@@ -370,9 +375,9 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
   const progress = computeProgress(validJournal, state.runs, settings, now);
 
   if (progress.verdict.verdict === 'Getting worse') {
-    if (!state.lastWorseAlertAt || now - state.lastWorseAlertAt > 24 * 3600_000) {
+    if (!state.lastWorseAlertAt || now - state.lastWorseAlertAt > 7 * 24 * 3600_000) {
       state.lastWorseAlertAt = now;
-      await notify(d.kv, d.send, 'Trading progress: Getting worse', progress.verdict.reason);
+      await say('Trading progress: Getting worse', progress.verdict.reason);
     }
   }
 
@@ -381,7 +386,7 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
   if (isMonday && state.lastWeeklyPushMonday !== mondayStr) {
     state.lastWeeklyPushMonday = mondayStr;
     const weeklySummary = computeWeeklySummary(progress);
-    await notify(d.kv, d.send, 'Weekly summary', weeklySummary);
+    await say('Weekly summary', weeklySummary);
   }
 
   if (!settings.agentEnabled && trigger === 'cron') return finish({ at: now, trigger, decision: 'disabled', summary: 'Agent is switched off in Settings.', notes });
@@ -394,7 +399,7 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
   }
   const pause = async (reason: string, extra: Partial<AgentRun> = {}) => {
     state.paused = { at: now, reason };
-    await notify(d.kv, d.send, 'AI agent paused: accuracy stopped improving', `${reason} Your current settings stay as they are. Open Journal → AI agent and tap Resume to restart it.`);
+    await say('AI agent paused: accuracy stopped improving', `${reason} Your current settings stay as they are. Open Journal → AI agent and tap Resume to restart it.`);
     return finish({ at: now, trigger, decision: 'paused', summary: `Paused: ${reason}`, accuracy, notes, ...extra });
   };
 
@@ -409,10 +414,10 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
     const st = computeStats(live.map((e) => e.rNet));
     const liveM = { n: st.n, avgR: +st.avgR.toFixed(3) };
     if (st.n >= 20 && st.avgR < Math.min(-0.1, lc.expectedR - 0.35)) {
-      await saveSettings(d.kv, applyParams(settings, lc.prev), now);
+      await saveSettings(d.kv, applyParams(settings, lc.prev), now, profile);
       state.lastChange = null;
       const summary = `Rolled back (${lc.changes.map(fmtChange).join(', ')}): live ${st.n} trades averaged ${st.avgR.toFixed(2)}R vs ${lc.expectedR.toFixed(2)}R expected.`;
-      await notify(d.kv, d.send, 'AI agent: change rolled back', summary);
+      await say('AI agent: change rolled back', summary);
       return finish({ at: now, trigger, decision: 'rolled_back', summary, changes: diffParams(lc.next, lc.prev), live: liveM, notes });
     }
     const daysSince = (now - lc.at) / 86_400_000;
@@ -432,7 +437,7 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
 
   // a paused agent only does the safety check above (rollback); it does not tune
   if (state.paused) {
-    await d.kv.cmd('SET', K.agent, JSON.stringify(state));
+    await d.kv.cmd('SET', PK(profile).agent, JSON.stringify(state));
     return { at: now, trigger, decision: 'paused', summary: `Still paused since ${new Date(state.paused.at).toISOString().slice(0, 10)}: ${state.paused.reason}`, accuracy, notes };
   }
 
@@ -464,6 +469,7 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
   let geminiPromise: Promise<any> | null = null;
   if (d.gemini) {
     const input = {
+      timeframes: { execution: settings.ltf, regime: settings.htf },
       current: Object.fromEntries([...NUM_KEYS.map((k) => [k, getNum(cur, k)]), ...STRATS.map((x) => [`enabled.${x}`, cur.enabled[x]])]),
       liveJournal: diagnose(validJournal, now - 30 * 86_400_000),
       backtestOfCurrent: { oldestWindow: curEval.fit, middleWindow: curEval.select, byPlaybook: curEval.perStrategy, days, pairs: [...hist.keys()] },
@@ -535,10 +541,10 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
 
   // 5) adopt
   const changes = diffParams(cur, best.p);
-  await saveSettings(d.kv, applyParams(settings, best.p), now);
+  await saveSettings(d.kv, applyParams(settings, best.p), now, profile);
   state.lastChange = { at: now, prev: cur, next: best.p, expectedR: best.ev.confirm.avgR, changes, before: accuracy };
   state.keptStreak = 0;
   const summary = `Changed ${changes.map(fmtChange).join(', ')}. Unseen window: ${best.ev.confirm.avgR.toFixed(2)}R/trade vs ${curEval.confirm.avgR.toFixed(2)}R before (${best.ev.confirm.n} trades).`;
-  await notify(d.kv, d.send, 'AI agent updated your setup', summary);
+  await say('AI agent updated your setup', summary);
   return finish({ ...base, decision: 'changed', summary, changes, why: best.why, chosen: { ...best.ev, source: best.source } });
 }

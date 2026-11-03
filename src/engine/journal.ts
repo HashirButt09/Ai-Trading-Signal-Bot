@@ -1,4 +1,4 @@
-import { ALL_STRATEGIES, parseIgnoreBefore, type Candle, type JournalEntry, type Outcome, type Settings, type Signal, type StrategyId } from './types.js';
+import { ALL_STRATEGIES, isIgnored, type Candle, type JournalEntry, type Outcome, type Settings, type Signal, type StrategyId } from './types.js';
 import { featurize, predictMeta, trainMeta, type MetaModel, type Sample } from './meta.js';
 import { effectiveThreshold, retrainGated } from './learner.js';
 
@@ -94,6 +94,34 @@ export function computeStats(rs: number[]): Stats {
 
 export const resolved = (list: JournalEntry[]) => list.filter((e) => e.outcome !== 'OPEN');
 
+/**
+ * Correlated signals: when many coins trigger the same side on the same candle, that is one market
+ * move, not many independent lessons. Learning gives each such group the weight of ONE trade.
+ */
+export const clusterKey = (e: JournalEntry) => `${e.signal.ltf}|${e.signal.time}|${e.signal.side}`;
+
+/** weight 1/n for each entry, where n is the size of its (candle, side) group in `list` */
+export function clusterWeights(list: JournalEntry[]): Map<JournalEntry, number> {
+  const n = new Map<string, number>();
+  for (const e of list) n.set(clusterKey(e), (n.get(clusterKey(e)) ?? 0) + 1);
+  return new Map(list.map((e) => [e, 1 / (n.get(clusterKey(e)) ?? 1)]));
+}
+
+/** group entries into (candle, side) clusters, keeping the order of each cluster's first entry */
+export function clusters(list: JournalEntry[]): JournalEntry[][] {
+  const g = new Map<string, JournalEntry[]>();
+  for (const e of list) {
+    const k = clusterKey(e);
+    const a = g.get(k);
+    if (a) a.push(e);
+    else g.set(k, [e]);
+  }
+  return [...g.values()];
+}
+
+/** number of independent decisions in a list (one per candle and side) */
+export const independentCount = (list: JournalEntry[]) => new Set(list.map(clusterKey)).size;
+
 export interface PlaybookHealth {
   strategy: StrategyId;
   n: number;
@@ -102,16 +130,19 @@ export interface PlaybookHealth {
   paused: boolean;
 }
 
-/** Rolling health of each playbook over its last 40 resolved signals (shadow signals included). */
+/**
+ * Rolling health of each playbook over its last 40 resolved signals (shadow signals included).
+ * Signals of the same playbook on the same candle and side count as ONE result (their average R).
+ */
 export function playbookHealth(list: JournalEntry[], s: Settings): Record<StrategyId, PlaybookHealth> {
-  const ignoreBefore = parseIgnoreBefore(s?.ignoreBefore);
   const out = {} as Record<StrategyId, PlaybookHealth>;
   ALL_STRATEGIES.forEach((k) => {
-    const rs = resolved(list)
-      .filter((e) => (e.resolvedAt ?? e.signal.time) >= ignoreBefore && e.signal.strategy === k)
-      .sort((a, b) => (a.resolvedAt ?? 0) - (b.resolvedAt ?? 0))
+    const mine = resolved(list)
+      .filter((e) => !isIgnored(e, s) && e.signal.strategy === k)
+      .sort((a, b) => (a.resolvedAt ?? 0) - (b.resolvedAt ?? 0));
+    const rs = clusters(mine)
       .slice(-40)
-      .map((e) => e.rNet);
+      .map((c) => c.reduce((a, e) => a + e.rNet, 0) / c.length);
     const st = computeStats(rs);
     out[k] = {
       strategy: k,
@@ -125,7 +156,9 @@ export function playbookHealth(list: JournalEntry[], s: Settings): Record<Strate
 }
 
 export function toSamples(list: JournalEntry[]): Sample[] {
-  return resolved(list).map((e) => ({ x: featurize(e.signal), y: e.rNet > 0 ? 1 : 0 }));
+  const done = resolved(list);
+  const w = clusterWeights(done);
+  return done.map((e) => ({ x: featurize(e.signal), y: e.rNet > 0 ? 1 : 0, w: w.get(e) ?? 1 }));
 }
 
 export const TRAIN_WINDOW_MS = 30 * 86_400_000;
@@ -136,9 +169,8 @@ export const TRAIN_WINDOW_MS = 30 * 86_400_000;
  * disappears during a quiet month.
  */
 export function trainingSet(list: JournalEntry[], s: Settings): JournalEntry[] {
-  const ignoreBefore = parseIgnoreBefore(s?.ignoreBefore);
   const done = resolved(list)
-    .filter((e) => (e.resolvedAt ?? e.signal.time) >= ignoreBefore)
+    .filter((e) => !isIgnored(e, s))
     .sort((a, b) => (a.resolvedAt ?? a.signal.time) - (b.resolvedAt ?? b.signal.time));
   if (!done.length) return [];
   const newest = done[done.length - 1].resolvedAt ?? done[done.length - 1].signal.time;

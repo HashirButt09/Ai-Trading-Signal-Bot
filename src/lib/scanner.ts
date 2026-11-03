@@ -55,6 +55,8 @@ export class Scanner {
 
   /** remote = the always-on server owns the journal + model; this app only displays them */
   remote = false;
+  /** which timeframe bot these numbers belong to ('main' here; a ProfileFeed view says '15m') */
+  viewProfile = 'main';
   server: ServerView = { mode: 'off', error: '', info: null, checkedAt: 0 };
   private ver = -1;
   private priceTimer: ReturnType<typeof setInterval> | null = null;

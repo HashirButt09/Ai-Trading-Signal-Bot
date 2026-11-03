@@ -49,6 +49,9 @@ function ServerCard({ value, onChange, scanner }: { value: S; onChange: (s: S) =
             <Row k="Last server scan" ok={!stale && i.status.lastScan > 0}>
               {ago(i.status.lastScan, now)}
               {(stale || !i.status.lastScan) && ' (the pinger is not calling /api/scan every minute: see README step 4)'}
+              {Object.entries(i.status.profiles ?? {}).map(([id, ps]) => (
+                <span key={id} className="muted"> · {id} bot: {ps.lastScan ? ago(ps.lastScan, now) : 'not yet'}{ps.lastError ? ` (${ps.lastError})` : ''}</span>
+              ))}
             </Row>
             <Row k="Pinger secret" ok={i.cron}>{i.cron ? 'CRON_SECRET set' : 'CRON_SECRET missing in Vercel (use Create push keys below)'}</Row>
             <Row k="Push keys" ok={i.vapid}>{i.vapid ? 'VAPID keys set' : 'Missing. Tap Create push keys below, add them in Vercel, redeploy.'}</Row>
@@ -86,6 +89,15 @@ function ServerCard({ value, onChange, scanner }: { value: S; onChange: (s: S) =
     </div>
   );
 }
+
+/** epoch ms <-> value of a datetime-local input (your local time); empty = 0 (off) */
+const toLocal = (ms: number) => {
+  if (!ms) return '';
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+const fromLocal = (v: string) => (v ? new Date(v).getTime() || 0 : 0);
 
 export function Settings({ value, onChange, scanner }: { value: S; onChange: (s: S) => void; scanner: Scanner }) {
   const [wl, setWl] = useState(value.watchlist.join(', '));
@@ -140,6 +152,24 @@ export function Settings({ value, onChange, scanner }: { value: S; onChange: (s:
             </select>
           </label>
         </div>
+        {(() => {
+          const p = (value.profiles ?? []).find((x) => x.id === '15m') ?? { id: '15m', ltf: '15m', htf: '4h', enabled: false };
+          const clash = value.ltf === p.ltf;
+          const setOn = (on: boolean) => onChange({ ...value, profiles: [{ ...p, enabled: on }, ...(value.profiles ?? []).filter((x) => x.id !== '15m')] });
+          return (
+            <>
+              <label className="check">
+                <input type="checkbox" checked={p.enabled && !clash} disabled={clash} onChange={(e) => setOn(e.target.checked)} />
+                Also run a second bot on {p.ltf} execution / {p.htf} regime, with its own journal, AI filter, playbook health and daily agent
+              </label>
+              <em className="muted small">
+                {clash
+                  ? `Your main bot already uses ${p.ltf}, so the second bot is off.`
+                  : 'Both bots use the same pairs, risk and playbooks. Switch between them at the top of Live, Trades and AI & journal. Needs the server.'}
+              </em>
+            </>
+          );
+        })()}
         <label className="field">
           <span>Watchlist (Binance USDT-M futures symbols, comma separated)</span>
           <textarea rows={3} value={wl} onChange={(e) => setWl(e.target.value)} onBlur={() => set('watchlist', [...new Set(wl.split(/[\s,]+/).map((x) => x.trim().toUpperCase()).filter(Boolean))].slice(0, 100))} />
@@ -202,16 +232,13 @@ export function Settings({ value, onChange, scanner }: { value: S; onChange: (s:
           {numField('pauseMinTrades', 'Auto-pause check after N trades', 5)}
           {numField('pauseExpectancyR', 'Pause playbook if expectancy below (R)', 0.05)}
           <label className="field">
-            <span>Ignore trades before</span>
-            <input
-              type="date"
-              value={value.ignoreBefore ? new Date(value.ignoreBefore).toISOString().slice(0, 10) : ''}
-              onChange={(e) => {
-                const ts = e.target.value ? new Date(e.target.value + 'T00:00:00Z').getTime() : 0;
-                set('ignoreBefore', ts);
-              }}
-            />
-            <em>Trades resolved before this date are ignored by learning, the agent and the progress card</em>
+            <span>Ignore trades from</span>
+            <input type="datetime-local" value={toLocal(value.ignoreFrom)} onChange={(e) => set('ignoreFrom', fromLocal(e.target.value))} />
+          </label>
+          <label className="field">
+            <span>Ignore trades until</span>
+            <input type="datetime-local" value={toLocal(value.ignoreTo)} onChange={(e) => set('ignoreTo', fromLocal(e.target.value))} />
+            <em>Trades that were open or closed in this window are skipped by learning, auto-pause, the agent and the progress card (default: the multi-coin price bug, 2-3 Nov). Clear both to use every trade.</em>
           </label>
         </div>
       </div>

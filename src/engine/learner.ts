@@ -15,9 +15,9 @@
  *
  * Score = log-loss: rewards being right AND being honest about how sure it is (lower is better).
  */
-import { parseIgnoreBefore, type JournalEntry, type Settings } from './types.js';
+import { isIgnored, type JournalEntry, type Settings } from './types.js';
 import { featurize, predictMeta, trainMeta, type GateReport, type HoldoutStats, type MetaModel, type ModelKind, type Sample } from './meta.js';
-import { resolved } from './journal.js';
+import { clusterWeights, clusters, resolved } from './journal.js';
 
 const DAY = 86_400_000;
 export const RECIPES: ModelKind[] = ['recent', 'longterm', 'weighted'];
@@ -35,10 +35,12 @@ function samples(kind: ModelKind, train: JournalEntry[], now: number, minN: numb
     const r = train.filter((e) => rt(e) >= now - 30 * DAY);
     xs = r.length >= minN ? r : train.slice(-minN);
   }
+  // one market move (many coins, same side, same candle) counts as one lesson
+  const cw = clusterWeights(xs);
   return xs.map((e) => ({
     x: featurize(e.signal),
     y: win(e) as 0 | 1,
-    w: kind === 'weighted' ? Math.pow(0.5, Math.max(0, now - rt(e)) / (30 * DAY)) : 1
+    w: (kind === 'weighted' ? Math.pow(0.5, Math.max(0, now - rt(e)) / (30 * DAY)) : 1) * (cw.get(e) ?? 1)
   }));
 }
 
@@ -84,9 +86,8 @@ export interface LearnResult {
  * their track records). Returns the model to use next.
  */
 export function retrainGated(list: JournalEntry[], s: Settings, current: MetaModel | null): LearnResult {
-  const ignoreBefore = parseIgnoreBefore(s?.ignoreBefore);
   const done = resolved(list)
-    .filter((e) => rt(e) >= ignoreBefore)
+    .filter((e) => !isIgnored(e, s))
     .sort((a, b) => rt(a) - rt(b));
   if (done.length < s.metaMinSamples) return { model: current, changed: false };
   const newest = rt(done[done.length - 1]);
@@ -100,7 +101,8 @@ export function retrainGated(list: JournalEntry[], s: Settings, current: MetaMod
     for (const k of [...RECIPES, 'off'] as const) {
       const m = k === 'off' ? current!.recipes!.longterm ?? current : current!.recipes![k as ModelKind];
       if (!m) continue;
-      const add = unseen.map((e) => +loss(k === 'off' ? baseP(m) : predictMeta(m, e.signal), win(e)).toFixed(5));
+      // one score per (candle, side) group, so a 13-coin move is one prediction, not 13
+      const add = clusters(unseen).map((c) => +(c.reduce((a, e) => a + loss(k === 'off' ? baseP(m) : predictMeta(m, e.signal), win(e)), 0) / c.length).toFixed(5));
       track[k] = [...(track[k] ?? []), ...add].slice(-TRACK);
     }
   }
@@ -149,8 +151,7 @@ export function retrainGated(list: JournalEntry[], s: Settings, current: MetaMod
 /** live check of the model as used: of the setups it rated >= threshold, how many won (unseen when rated) */
 export function liveAccuracy(list: JournalEntry[], s: Settings, sinceDays = 30) {
   const thr = effectiveThreshold(s);
-  const ignoreBefore = parseIgnoreBefore(s?.ignoreBefore);
-  const done = resolved(list).filter((e) => !e.seed && e.signal.pWin !== undefined && rt(e) >= Math.max(Date.now() - sinceDays * DAY, ignoreBefore));
+  const done = resolved(list).filter((e) => !e.seed && e.signal.pWin !== undefined && rt(e) >= Date.now() - sinceDays * DAY && !isIgnored(e, s));
   const above = done.filter((e) => (e.signal.pWin ?? 0) >= thr);
   const wins = above.filter((e) => e.rNet > 0).length;
   const avgR = above.length ? above.reduce((a, e) => a + e.rNet, 0) / above.length : 0;
