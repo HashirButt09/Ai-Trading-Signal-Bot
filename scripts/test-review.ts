@@ -174,5 +174,54 @@ delete process.env.REVIEW_PASSCODE;
 const g = mod.GET();
 ok(g.status === 405, 'GET -> 405');
 
+// Overall deadline tests: fake fetch that always returns 503 gives up within the deadline
+const { callGemini, geminiJson } = await import('../server/gemini.js');
+
+process.env.GEMINI_RETRY_DELAYS = '10,10';
+(globalThis as any).fetch = async (url: string, init: any) => {
+  lastCall = { url, init };
+  return { ok: false, status: 503, json: async () => ({ error: { message: 'overloaded' } }) };
+};
+
+// Test agent call (geminiJson): fake fetch always returns 503, deadline = 100ms
+const tStartAgent = Date.now();
+let agentErr: any = null;
+try {
+  await geminiJson('system', 'prompt', 100);
+} catch (e: any) {
+  agentErr = e;
+}
+const agentDuration = Date.now() - tStartAgent;
+ok(agentErr && agentErr.message.includes('503'), 'agent geminiJson throws last 503 error when overloaded');
+ok(agentDuration < 500, 'agent geminiJson stops retrying and gives up within the deadline');
+
+// Test review call (callGemini): fake fetch always returns 503, deadline = 100ms
+const tStartReview = Date.now();
+let reviewErr: any = null;
+try {
+  await callGemini({
+    apiKey: 'secret-key-123',
+    system: 'system',
+    prompt: 'prompt',
+    deadlineMs: 100
+  });
+} catch (e: any) {
+  reviewErr = e;
+}
+const reviewDuration = Date.now() - tStartReview;
+ok(reviewErr && reviewErr.message.includes('503'), 'callGemini returns last 503 error');
+ok(reviewDuration < 500, 'callGemini stops retrying and gives up within the deadline');
+
+// Test api/review endpoint with fake fetch returning 503 and short deadline
+mod.hits.length = 0;
+process.env.REVIEW_PASSCODE = 'letmein';
+process.env.GEMINI_DEADLINE_MS = '100';
+r = await mod.POST(req(sig, { 'x-app-key': 'letmein' }));
+j = await r.json();
+ok(r.status === 502 && j.error.includes('503'), 'api/review endpoint gives up on 503 and returns 502 within deadline');
+delete process.env.GEMINI_DEADLINE_MS;
+delete process.env.GEMINI_RETRY_DELAYS;
+delete process.env.REVIEW_PASSCODE;
+
 console.log(fails ? `\n${fails} FAILED` : '\nAll review-endpoint checks passed');
 process.exit(fails ? 1 : 0);
