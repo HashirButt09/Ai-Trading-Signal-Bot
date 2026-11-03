@@ -110,7 +110,8 @@ Adds an **AI review (advisory)** button on each signal and a **Review my journal
 2. In Vercel -> Project -> Settings -> Environment Variables add:
    - `GEMINI_API_KEY` = your key (required, never put it in the app code)
    - `REVIEW_PASSCODE` = any secret word (strongly recommended, stops strangers using your quota)
-   - `GEMINI_MODEL` = optional, default `gemini-2.5-flash`; set a newer name if Google retires it
+   - `GEMINI_MODEL` = optional, default `gemini-3.8-flash`; set a newer name if Google retires it
+   - `GEMINI_FALLBACK_MODEL` = optional, default `gemini-3.5-flash-lite`
 3. Redeploy, then in the app: Settings -> Server -> enter the same passcode (the same field is used for the review).
 
 Locally, `/api/review` only works with `npx vercel dev` (not `npm run dev`).

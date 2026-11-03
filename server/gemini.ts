@@ -9,8 +9,8 @@ export const geminiJson: GeminiJson = async (system, prompt) => {
   const key = process.env.GEMINI_API_KEY || process.env.gemini_api_key;
   if (!key) throw new Error('GEMINI_API_KEY not set');
 
-  const primaryModel = (process.env.GEMINI_MODEL || process.env.gemini_model || '').trim() || 'gemini-2.5-flash';
-  const fallbackModel = (process.env.GEMINI_FALLBACK_MODEL || process.env.gemini_fallback_model || '').trim() || 'gemini-2.5-flash';
+  const primaryModel = (process.env.GEMINI_MODEL || process.env.gemini_model || '').trim() || 'gemini-3.8-flash';
+  const fallbackModel = (process.env.GEMINI_FALLBACK_MODEL || process.env.gemini_fallback_model || '').trim() || 'gemini-3.5-flash-lite';
   const models = [primaryModel];
   if (fallbackModel && fallbackModel !== primaryModel) {
     models.push(fallbackModel);
@@ -22,6 +22,9 @@ export const geminiJson: GeminiJson = async (system, prompt) => {
 
   let lastError: Error | null = null;
   for (const model of models) {
+    const supportsThinking = /(?:2\.5|3\.)/.test(model);
+    let thinkingDisabled = false;
+
     let attempt = 0;
     while (attempt <= 2) {
       if (attempt > 0) {
@@ -39,7 +42,7 @@ export const geminiJson: GeminiJson = async (system, prompt) => {
               temperature: 0.3,
               maxOutputTokens: 6000,
               responseMimeType: 'application/json',
-              ...(/2\.5/.test(model) ? { thinkingConfig: { thinkingBudget: 1024 } } : {})
+              ...(supportsThinking && !thinkingDisabled ? { thinkingConfig: { thinkingBudget: 1024 } } : {})
             }
           }),
           signal: AbortSignal.timeout(38_000)
@@ -48,6 +51,10 @@ export const geminiJson: GeminiJson = async (system, prompt) => {
         const out: any = await res.json().catch(() => ({}));
         if (!res.ok) {
           const msg = String(out?.error?.message ?? `HTTP ${res.status}`);
+          if (!thinkingDisabled && (msg.includes('thinkingConfig') || msg.includes('thinking_config') || msg.includes('thinkingBudget') || msg.includes('Thinking is not supported'))) {
+            thinkingDisabled = true;
+            continue;
+          }
           if (res.status === 503 || res.status === 429) {
             lastError = new Error(`Gemini ${res.status} (${model}): ${msg.slice(0, 200)}`);
             attempt++;
