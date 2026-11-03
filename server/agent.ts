@@ -15,11 +15,12 @@
  *  7. Plateau: if 5 runs in a row find nothing better, or 2 adopted changes in a row did not raise
  *     live accuracy, the agent pauses itself and notifies you. "Resume" (or Run now) restarts it.
  */
-import { ALL_STRATEGIES, DEFAULT_TUNE, STRATEGY_LABEL, type Candle, type JournalEntry, type Settings, type StrategyId, type Tune } from '../src/engine/types.js';
+import { ALL_STRATEGIES, DEFAULT_TUNE, STRATEGY_LABEL, parseIgnoreBefore, type Candle, type JournalEntry, type Settings, type StrategyId, type Tune } from '../src/engine/types.js';
 import { runBacktest, type BtTrade } from '../src/engine/backtest.js';
 import { computeStats, resolved, toSamples, type Stats } from '../src/engine/journal.js';
 import { predictMeta, trainMeta } from '../src/engine/meta.js';
 import { TF_MS } from '../src/engine/time.js';
+import { computeProgress, computeWeeklySummary } from '../src/engine/progress.js';
 import type { Kv } from './kv.js';
 import { K, loadAll, saveCmds } from './store.js';
 import { acquireLock, releaseLock } from './scan.js';
@@ -241,6 +242,8 @@ export interface AgentState {
   paused: null | { at: number; reason: string };
   keptStreak: number; // runs in a row that found nothing better
   noGain: number; // adopted changes in a row that did not improve live accuracy
+  lastWeeklyPushMonday?: string;
+  lastWorseAlertAt?: number;
 }
 export const EMPTY_AGENT: AgentState = { runs: [], lastChange: null, paused: null, keptStreak: 0, noGain: 0 };
 export const PLATEAU_KEPT = 5;
@@ -354,6 +357,8 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
   const notes: string[] = [];
   const state = await loadAgent(d.kv);
   const { settings, journal } = await loadAll(d.kv);
+  const ignoreBefore = parseIgnoreBefore(settings.ignoreBefore);
+  const validJournal = journal.filter((e) => (e.resolvedAt ?? e.signal.time) >= ignoreBefore);
   const cur = paramsOf(settings);
   const finish = async (run: AgentRun) => {
     pushRun(state, run);
@@ -361,8 +366,26 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
     return run;
   };
 
+  // Progress check & push notifications
+  const progress = computeProgress(validJournal, state.runs, settings, now);
+
+  if (progress.verdict.verdict === 'Getting worse') {
+    if (!state.lastWorseAlertAt || now - state.lastWorseAlertAt > 24 * 3600_000) {
+      state.lastWorseAlertAt = now;
+      await notify(d.kv, d.send, 'Trading progress: Getting worse', progress.verdict.reason);
+    }
+  }
+
+  const isMonday = new Date(now).getUTCDay() === 1;
+  const mondayStr = new Date(now).toISOString().slice(0, 10);
+  if (isMonday && state.lastWeeklyPushMonday !== mondayStr) {
+    state.lastWeeklyPushMonday = mondayStr;
+    const weeklySummary = computeWeeklySummary(progress);
+    await notify(d.kv, d.send, 'Weekly summary', weeklySummary);
+  }
+
   if (!settings.agentEnabled && trigger === 'cron') return finish({ at: now, trigger, decision: 'disabled', summary: 'Agent is switched off in Settings.', notes });
-  const accuracy = liveAcc(journal, now - 30 * 86_400_000);
+  const accuracy = liveAcc(validJournal, now - 30 * 86_400_000);
   if (state.paused && trigger === 'manual') {
     notes.push('You pressed Run now, so the paused agent was resumed.');
     state.paused = null;
@@ -382,7 +405,7 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
   }
   const lc = state.lastChange;
   if (lc) {
-    const live = resolved(journal).filter((e) => !e.seed && e.signal.time >= lc.at);
+    const live = resolved(validJournal).filter((e) => !e.seed && e.signal.time >= lc.at);
     const st = computeStats(live.map((e) => e.rNet));
     const liveM = { n: st.n, avgR: +st.avgR.toFixed(3) };
     if (st.n >= 20 && st.avgR < Math.min(-0.1, lc.expectedR - 0.35)) {
@@ -442,7 +465,7 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
   if (d.gemini) {
     const input = {
       current: Object.fromEntries([...NUM_KEYS.map((k) => [k, getNum(cur, k)]), ...STRATS.map((x) => [`enabled.${x}`, cur.enabled[x]])]),
-      liveJournal: diagnose(journal, now - 30 * 86_400_000),
+      liveJournal: diagnose(validJournal, now - 30 * 86_400_000),
       backtestOfCurrent: { oldestWindow: curEval.fit, middleWindow: curEval.select, byPlaybook: curEval.perStrategy, days, pairs: [...hist.keys()] },
       recentAgentDecisions: state.runs.slice(0, 5).map((r) => ({ when: new Date(r.at).toISOString().slice(0, 10), decision: r.decision, summary: r.summary }))
     };

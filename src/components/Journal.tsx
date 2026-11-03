@@ -1,12 +1,28 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { STRATEGY_LABEL, type StrategyId } from '../engine/types';
 import { reviewJournal } from '../lib/review';
 import type { Scanner } from '../lib/scanner';
 import { computeStats, resolved } from '../engine/journal';
 import { effectiveThreshold, liveAccuracy } from '../engine/learner';
+import { computeProgress, type AgentRunLike, type VerdictType } from '../engine/progress';
+import { agentGet } from '../lib/server';
 
 const STYLE: Record<string, string> = { recent: 'Last 30 days', longterm: 'All history', weighted: 'All history, recent weighted', off: 'No filter (show all)' };
 import { localTime, num, pct, fmtPrice } from '../lib/format';
+
+function verdictBadge(v: VerdictType): string {
+  switch (v) {
+    case 'Improving':
+    case 'Filter is helping':
+      return 'up';
+    case 'Getting worse':
+      return 'down';
+    case 'Not helping yet':
+      return 'neutral';
+    default:
+      return 'muted-b';
+  }
+}
 
 export function Journal({ scanner }: { scanner: Scanner }) {
   const all = scanner.journal;
@@ -17,6 +33,18 @@ export function Journal({ scanner }: { scanner: Scanner }) {
   const sLive = computeStats(live.map((e) => e.rNet));
   const sShadow = computeStats(shadow.map((e) => e.rNet));
   const m = scanner.model;
+  const [runs, setRuns] = useState<AgentRunLike[]>([]);
+  useEffect(() => {
+    if (scanner.server.mode === 'on' && scanner.settings.reviewPasscode) {
+      agentGet(scanner.settings.reviewPasscode)
+        .then((res) => {
+          if (Array.isArray(res?.runs)) setRuns(res.runs);
+        })
+        .catch(() => {});
+    }
+  }, [scanner.server.mode, scanner.settings.reviewPasscode]);
+
+  const progress = computeProgress(all, runs, scanner.settings);
   const [rev, setRev] = useState<{ text?: string; error?: string; busy?: boolean }>({});
   const runReview = async () => {
     setRev({ busy: true });
@@ -42,6 +70,65 @@ export function Journal({ scanner }: { scanner: Scanner }) {
 
   return (
     <div className="page">
+      <div className="card">
+        <div className="row between wrap gap">
+          <div>
+            <div className="label">Progress</div>
+            <div className="big" style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+              <span className={`badge ${verdictBadge(progress.verdict.verdict)}`} style={{ fontSize: '0.9rem', padding: '3px 8px' }}>
+                {progress.verdict.verdict}
+              </span>
+            </div>
+            <div className="muted small" style={{ marginTop: 4 }}>
+              {progress.verdict.reason}
+            </div>
+          </div>
+        </div>
+
+        <div className="tablewrap" style={{ marginTop: 10 }}>
+          <table>
+            <thead>
+              <tr>
+                <th>Week</th>
+                <th>Active Trades</th>
+                <th>Win Rate</th>
+                <th>Avg R</th>
+                <th>Total R</th>
+                <th>Blocked Avg R</th>
+                <th>AI Calibration</th>
+                <th>Agent Decisions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {progress.weeks.map((w) => (
+                <tr key={w.weekIndex}>
+                  <td><b>{w.label}</b></td>
+                  <td>{w.active.trades}</td>
+                  <td>{w.active.trades ? pct(w.active.winRate, 0) : '-'}</td>
+                  <td className={w.active.avgR > 0 ? 'up-t' : w.active.avgR < 0 ? 'down-t' : ''}>
+                    {w.active.trades ? `${num(w.active.avgR, 2)}R` : '-'}
+                  </td>
+                  <td className={w.active.totalR > 0 ? 'up-t' : w.active.totalR < 0 ? 'down-t' : ''}>
+                    {w.active.trades ? `${num(w.active.totalR, 1)}R` : '-'}
+                  </td>
+                  <td className={w.filtered.avgR != null ? (w.filtered.avgR > 0 ? 'up-t' : w.filtered.avgR < 0 ? 'down-t' : '') : 'muted'}>
+                    {w.filtered.avgR != null ? `${num(w.filtered.avgR, 2)}R` : '-'}
+                  </td>
+                  <td>
+                    {w.ai.avgPWin != null && w.ai.realWinRate != null
+                      ? `${pct(w.ai.avgPWin, 0)} pred vs ${pct(w.ai.realWinRate, 0)} real`
+                      : '-'}
+                  </td>
+                  <td className="muted small">
+                    {`${w.agent.applied} applied / ${w.agent.kept} kept / ${w.agent.rolledBack} rolled back`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div className="cards">
         <div className="card">
           <div className="label">AI filter</div>

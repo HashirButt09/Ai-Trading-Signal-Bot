@@ -70,9 +70,10 @@ const D = 86_400_000;
 const mk = (i: number, daysAgo: number): JournalEntry => ({ signal: { ...sig, id: 'x' + i, time: 100 * D - daysAgo * D }, status: 'ACTIVE', outcome: i % 2 ? 'WIN' : 'LOSS', rNet: i % 2 ? 1 : -1, barsOpen: 3, resolvedAt: 100 * D - daysAgo * D + 1000 });
 const old = Array.from({ length: 50 }, (_, i) => mk(i, 40 + (i % 10)));
 const recent = Array.from({ length: 45 }, (_, i) => mk(100 + i, i % 28));
-const ts = trainingSet([...old, ...recent], DEFAULT_SETTINGS);
+const tsSettings = { ...DEFAULT_SETTINGS, ignoreBefore: 0 };
+const ts = trainingSet([...old, ...recent], tsSettings);
 ok(ts.length === 45 && ts.every((x) => x.signal.id.startsWith('x1')), `AI filter learns only from the last 30 days (${ts.length} trades, older ones ignored)`);
-const sparse = trainingSet([...old, ...recent.slice(0, 5)], DEFAULT_SETTINGS);
+const sparse = trainingSet([...old, ...recent.slice(0, 5)], tsSettings);
 ok(sparse.length === DEFAULT_SETTINGS.metaMinSamples, 'quiet month: falls back to the most recent trades so the filter does not vanish');
 
 // 5) plans kept for the Trades tab week

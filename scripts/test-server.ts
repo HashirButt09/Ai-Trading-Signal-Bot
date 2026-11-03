@@ -67,7 +67,7 @@ const send = async (sub: PushSub, p: any) => {
   return 'ok' as const;
 };
 
-const settings = { ...DEFAULT_SETTINGS, watchlist: ['AAAUSDT', 'BBBUSDT'], metaMinSamples: 30, telegramToken: 'tg', telegramChatId: '1' };
+const settings = { ...DEFAULT_SETTINGS, watchlist: ['AAAUSDT', 'BBBUSDT'], metaMinSamples: 30, telegramToken: 'tg', telegramChatId: '1', ignoreBefore: 0 };
 await mem.cmd('SET', K.settings, JSON.stringify(settings));
 await setSub(kv, phone, ['AAAUSDT']); // bell on for AAA only
 await setSub(kv, oldTab, ['AAAUSDT', 'BBBUSDT']);

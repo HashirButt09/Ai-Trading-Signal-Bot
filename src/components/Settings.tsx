@@ -201,6 +201,18 @@ export function Settings({ value, onChange, scanner }: { value: S; onChange: (s:
           {numField('metaMinSamples', 'Samples needed before filtering', 5)}
           {numField('pauseMinTrades', 'Auto-pause check after N trades', 5)}
           {numField('pauseExpectancyR', 'Pause playbook if expectancy below (R)', 0.05)}
+          <label className="field">
+            <span>Ignore trades before</span>
+            <input
+              type="date"
+              value={value.ignoreBefore ? new Date(value.ignoreBefore).toISOString().slice(0, 10) : ''}
+              onChange={(e) => {
+                const ts = e.target.value ? new Date(e.target.value + 'T00:00:00Z').getTime() : 0;
+                set('ignoreBefore', ts);
+              }}
+            />
+            <em>Trades resolved before this date are ignored by learning, the agent and the progress card</em>
+          </label>
         </div>
       </div>
 

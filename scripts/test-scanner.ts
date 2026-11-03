@@ -49,7 +49,7 @@ const { Scanner } = await import('../src/lib/scanner');
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log(`${c ? 'PASS' : 'FAIL'}  ${m}`); if (!c) fails++; };
 
-const settings = { ...DEFAULT_SETTINGS, watchlist: ['SYNTHUSDT'], ltf: '5m', htf: '1h' };
+const settings = { ...DEFAULT_SETTINGS, watchlist: ['SYNTHUSDT'], ltf: '5m', htf: '1h', ignoreBefore: 0 };
 const sc = new Scanner(settings);
 await sc.start();
 ok(sc.conn === 'loading' || sc.conn === 'live', `history loaded, state=${sc.conn}`);

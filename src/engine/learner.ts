@@ -15,7 +15,7 @@
  *
  * Score = log-loss: rewards being right AND being honest about how sure it is (lower is better).
  */
-import type { JournalEntry, Settings } from './types.js';
+import { parseIgnoreBefore, type JournalEntry, type Settings } from './types.js';
 import { featurize, predictMeta, trainMeta, type GateReport, type HoldoutStats, type MetaModel, type ModelKind, type Sample } from './meta.js';
 import { resolved } from './journal.js';
 
@@ -84,7 +84,10 @@ export interface LearnResult {
  * their track records). Returns the model to use next.
  */
 export function retrainGated(list: JournalEntry[], s: Settings, current: MetaModel | null): LearnResult {
-  const done = resolved(list).sort((a, b) => rt(a) - rt(b));
+  const ignoreBefore = parseIgnoreBefore(s?.ignoreBefore);
+  const done = resolved(list)
+    .filter((e) => rt(e) >= ignoreBefore)
+    .sort((a, b) => rt(a) - rt(b));
   if (done.length < s.metaMinSamples) return { model: current, changed: false };
   const newest = rt(done[done.length - 1]);
   const fresh = !current || !current.recipes; // first model, or one saved by an older version
@@ -146,7 +149,8 @@ export function retrainGated(list: JournalEntry[], s: Settings, current: MetaMod
 /** live check of the model as used: of the setups it rated >= threshold, how many won (unseen when rated) */
 export function liveAccuracy(list: JournalEntry[], s: Settings, sinceDays = 30) {
   const thr = effectiveThreshold(s);
-  const done = resolved(list).filter((e) => !e.seed && e.signal.pWin !== undefined && rt(e) >= Date.now() - sinceDays * DAY);
+  const ignoreBefore = parseIgnoreBefore(s?.ignoreBefore);
+  const done = resolved(list).filter((e) => !e.seed && e.signal.pWin !== undefined && rt(e) >= Math.max(Date.now() - sinceDays * DAY, ignoreBefore));
   const above = done.filter((e) => (e.signal.pWin ?? 0) >= thr);
   const wins = above.filter((e) => e.rNet > 0).length;
   const avgR = above.length ? above.reduce((a, e) => a + e.rNet, 0) / above.length : 0;

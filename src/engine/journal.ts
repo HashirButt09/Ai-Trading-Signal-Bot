@@ -1,4 +1,4 @@
-import { ALL_STRATEGIES, type Candle, type JournalEntry, type Outcome, type Settings, type Signal, type StrategyId } from './types.js';
+import { ALL_STRATEGIES, parseIgnoreBefore, type Candle, type JournalEntry, type Outcome, type Settings, type Signal, type StrategyId } from './types.js';
 import { featurize, predictMeta, trainMeta, type MetaModel, type Sample } from './meta.js';
 import { effectiveThreshold, retrainGated } from './learner.js';
 
@@ -104,10 +104,11 @@ export interface PlaybookHealth {
 
 /** Rolling health of each playbook over its last 40 resolved signals (shadow signals included). */
 export function playbookHealth(list: JournalEntry[], s: Settings): Record<StrategyId, PlaybookHealth> {
+  const ignoreBefore = parseIgnoreBefore(s?.ignoreBefore);
   const out = {} as Record<StrategyId, PlaybookHealth>;
   ALL_STRATEGIES.forEach((k) => {
     const rs = resolved(list)
-      .filter((e) => e.signal.strategy === k)
+      .filter((e) => (e.resolvedAt ?? e.signal.time) >= ignoreBefore && e.signal.strategy === k)
       .sort((a, b) => (a.resolvedAt ?? 0) - (b.resolvedAt ?? 0))
       .slice(-40)
       .map((e) => e.rNet);
@@ -135,7 +136,10 @@ export const TRAIN_WINDOW_MS = 30 * 86_400_000;
  * disappears during a quiet month.
  */
 export function trainingSet(list: JournalEntry[], s: Settings): JournalEntry[] {
-  const done = resolved(list).sort((a, b) => (a.resolvedAt ?? a.signal.time) - (b.resolvedAt ?? b.signal.time));
+  const ignoreBefore = parseIgnoreBefore(s?.ignoreBefore);
+  const done = resolved(list)
+    .filter((e) => (e.resolvedAt ?? e.signal.time) >= ignoreBefore)
+    .sort((a, b) => (a.resolvedAt ?? a.signal.time) - (b.resolvedAt ?? b.signal.time));
   if (!done.length) return [];
   const newest = done[done.length - 1].resolvedAt ?? done[done.length - 1].signal.time;
   const recent = done.filter((e) => (e.resolvedAt ?? e.signal.time) >= newest - TRAIN_WINDOW_MS);

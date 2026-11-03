@@ -61,7 +61,7 @@ const history = async (sym: string, interval: string, count: number) => (interva
 
 async function fresh(extra: Partial<Settings> = {}) {
   const kv = memoryKv();
-  const s = { ...DEFAULT_SETTINGS, watchlist: PAIRS, ...extra };
+  const s = { ...DEFAULT_SETTINGS, watchlist: PAIRS, ignoreBefore: 0, ...extra };
   await kv.cmd('SET', K.settings, JSON.stringify(s));
   await kv.cmd('SET', K.status, JSON.stringify({ ver: 7, lastScan: 0, lastError: '', errors: {}, lastSignalAt: 0, settingsAt: 0, settingsBy: '' }));
   return kv;

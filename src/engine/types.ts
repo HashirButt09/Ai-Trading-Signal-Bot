@@ -83,7 +83,21 @@ export interface Settings {
   minWinChance: number; // your floor for the AI's estimated win chance (0 = off); the agent cannot lower it
   maxOpenTrades: number; // max simultaneous active trades across all coins
   maxNewPerCandle: number; // max new active trades on a single candle close
+  ignoreBefore: number; // ignore trades resolved before this epoch ms (default: deploy time of 7ddaa87)
   editedAt: number; // when settings were last changed on this device (newer side wins when syncing)
+}
+
+export const BUG_DEPLOY_TIME = 1793694732000; // time commit 7ddaa87 was deployed (2026-11-03T08:32:12.000Z)
+
+export function parseIgnoreBefore(val?: number | string | Date | null): number {
+  if (val === undefined || val === null) return BUG_DEPLOY_TIME;
+  if (typeof val === 'number') {
+    if (val === 0) return 0;
+    return val < 1e11 ? val * 1000 : val;
+  }
+  if (val instanceof Date) return val.getTime();
+  const parsed = Date.parse(String(val));
+  return isNaN(parsed) ? 0 : parsed;
 }
 
 export const SYMBOL_ALIASES: Record<string, string> = {
@@ -152,6 +166,7 @@ export const DEFAULT_SETTINGS: Settings = {
   tune: { ...DEFAULT_TUNE },
   agentEnabled: true,
   minWinChance: 0,
+  ignoreBefore: BUG_DEPLOY_TIME,
   editedAt: 0
 };
 

@@ -56,7 +56,7 @@ r = await body(await state.GET(req(`/api/state?ver=${v0}`, { key: 'secret-word' 
 ok(r.j.unchanged === true && r.j.journal === undefined, 'unchanged version -> journal not re-sent (saves data)');
 
 // settings: secrets that belong in the browser are stripped
-r = await body(await state.POST(req('/api/state', { method: 'POST', key: 'secret-word', body: { action: 'settings', settings: { watchlist: ['btcusdt', 'ETHUSDT', 'bad pair!'], ltf: '15m', reviewPasscode: 'leak' } } })));
+r = await body(await state.POST(req('/api/state', { method: 'POST', key: 'secret-word', body: { action: 'settings', settings: { watchlist: ['btcusdt', 'ETHUSDT', 'bad pair!'], ltf: '15m', reviewPasscode: 'leak', ignoreBefore: 0 } } })));
 const saved = JSON.parse(mem.data.get(K.settings));
 ok(r.status === 200 && saved.watchlist.join() === 'BTCUSDT,ETHUSDT' && saved.ltf === '15m' && saved.reviewPasscode === '', 'settings saved, cleaned, passcode never stored');
 r = await body(await state.GET(req(`/api/state?ver=${v0}`, { key: 'secret-word' })));

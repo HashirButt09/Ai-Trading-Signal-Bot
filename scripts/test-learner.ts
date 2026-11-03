@@ -11,7 +11,7 @@ let seed = 9;
 const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
 const DAY = 86_400_000;
 const T0 = Date.UTC(2026, 0, 1);
-const S: Settings = { ...DEFAULT_SETTINGS, metaMinSamples: 40 };
+const S: Settings = { ...DEFAULT_SETTINGS, metaMinSamples: 40, ignoreBefore: 0 };
 
 /** a trade whose chance of winning depends on volume: rule(volRatio) -> P(win) */
 let id = 0;
