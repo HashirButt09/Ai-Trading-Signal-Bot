@@ -8,13 +8,14 @@ import { retrainGated } from '../src/engine/learner';
 import { featurize, predictMeta, trainMeta } from '../src/engine/meta';
 import { memoryKv } from '../server/kv';
 import { runScan } from '../server/scan';
-import { K } from '../server/store';
+import { K, loadAll } from '../server/store';
 import { setSub } from '../server/push';
+import { history } from '../src/engine/archive';
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log(`${c ? 'PASS' : 'FAIL'}  ${m}`); if (!c) fails++; };
 const S: Settings = { ...DEFAULT_SETTINGS, ignoreFrom: 0, ignoreTo: 0, profiles: [] };
-const NEW: StrategyId[] = ['BREAK_RETEST', 'VWAP_RECLAIM', 'ORDER_BLOCK', 'BB_SQUEEZE'];
+const NEW: StrategyId[] = ['BREAK_RETEST', 'VWAP_RECLAIM', 'ORDER_BLOCK', 'BB_SQUEEZE', 'DAY_SWEEP', 'RSI_DIVERGENCE', 'SESSION_ORB', 'DONCHIAN_BREAKOUT', 'EMA200_BOUNCE'];
 
 // ---------- synthetic market ----------
 let seed = 21;
@@ -42,22 +43,38 @@ function synth(n: number, p0: number) {
   const H = buildHtf(mk.h1);
   const fired: Record<string, number> = {};
   const checks: number[] = [];
-  for (let i = WARMUP; i < mk.m5.length - 1; i++) {
-    const r = evaluate('XUSDT', L, i, H, S);
-    if (r.signal && PROBATION.has(r.signal.strategy)) {
-      fired[r.signal.strategy] = (fired[r.signal.strategy] ?? 0) + 1;
-      if (checks.length < 60) checks.push(i);
+  const firstOf = new Set<string>();
+  // each learning playbook alone, so every one of them gets checked (they only fire when no other one did)
+  for (const k of NEW) {
+    const only = { ...S, enabled: Object.fromEntries(Object.keys(S.enabled).map((x) => [x, x === k])) as Settings['enabled'] };
+    for (let i = WARMUP; i < mk.m5.length - 1; i++) {
+      const r = evaluate('XUSDT', L, i, H, only);
+      if (r.signal && r.signal.strategy === k) {
+        fired[k] = (fired[k] ?? 0) + 1;
+        if (!firstOf.has(k) || checks.length < 90) { checks.push(i * 100 + NEW.indexOf(k)); firstOf.add(k); }
+      }
     }
   }
   for (const k of NEW) ok((fired[k] ?? 0) > 0, `${k} finds setups on a synthetic market (${fired[k] ?? 0})`);
   let same = 0;
-  for (const i of checks) {
+  for (const code of checks) {
+    const i = Math.floor(code / 100), k = NEW[code % 100];
+    const only = { ...S, enabled: Object.fromEntries(Object.keys(S.enabled).map((x) => [x, x === k])) as Settings['enabled'] };
     const cut = buildLtf(mk.m5.slice(0, i + 1)); // nothing after the trigger candle exists
-    const a = evaluate('XUSDT', L, i, H, S).signal!;
-    const b = evaluate('XUSDT', cut, i, H, S).signal;
-    if (b && b.id === a.id && b.entry === a.entry && b.sl === a.sl && b.tp === a.tp) same++;
+    const a = evaluate('XUSDT', L, i, H, only).signal!;
+    const b = evaluate('XUSDT', cut, i, H, only).signal;
+    if (b && b.id === a.id && b.entry === a.entry && b.sl === a.sl && b.tp === a.tp && JSON.stringify(b.plans) === JSON.stringify(a.plans)) same++;
   }
-  ok(checks.length > 10 && same === checks.length, `new playbooks use only closed candles: identical without future data (${same}/${checks.length})`);
+  ok(checks.length > 10 && same === checks.length, `new playbooks and their exit plans use only closed candles: identical without future data (${same}/${checks.length}, every playbook checked)`);
+  // the funding playbook needs live funding / open interest
+  const fOnly = { ...S, enabled: Object.fromEntries(Object.keys(S.enabled).map((x) => [x, x === 'FUNDING_FADE'])) as Settings['enabled'] };
+  let fNone = 0, fCrowd = 0;
+  for (let i = WARMUP; i < 6000; i++) {
+    if (evaluate('XUSDT', L, i, H, fOnly)?.signal) fNone++;
+    const r = evaluate('XUSDT', L, i, H, fOnly, null, { funding: 0.0008, oiChg: 0.02 });
+    if (r.signal) { fCrowd++; if (r.signal.side !== 'SHORT' || r.signal.features.funding !== 8) fCrowd = -1e9; }
+  }
+  ok(fNone === 0 && fCrowd > 0, `Funding fade never fires without live data, and fades crowded longs when funding is extreme (${fCrowd} shorts)`);
 }
 
 // ---------- 2) learning mode: silent until proven, live while proven ----------
@@ -105,7 +122,10 @@ function tr(strategy: StrategyId, rNet: number, t: number, btcAlign = 0, vol = 1
   ok(old.w.length === 20 && Number.isFinite(p) && p > 0 && p < 1, 'a model trained before the new features still predicts (they are appended, never inserted)');
   const f = featurize(tr('TREND_FVG_RETEST', 0, T0, 1).signal);
   const g = featurize(tr('TREND_FVG_RETEST', 0, T0, 1).signal);
-  ok(f.slice(0, 20).join() === g.slice(0, 20).join() && f.length === 25, 'existing feature positions are unchanged');
+  ok(f.slice(0, 25).join() === g.slice(0, 25).join() && f.length === 36, `existing feature positions are unchanged, new ones appended (${f.length} features)`);
+  const early = tr('TREND_FVG_RETEST', 0, T0, 1).signal;
+  const withCtx = { ...early, features: { ...early.features, funding: 9, oiChg: 3, btcVol: 1.2, pdhDist: 2, pdlDist: 5 } };
+  ok(featurize(withCtx).slice(0, 25).join() === featurize(early).slice(0, 25).join(), 'market context only adds features at the end');
 }
 
 // ---------- 5) it retrains itself as trades close, and gets more accurate ----------
@@ -180,7 +200,7 @@ function tr(strategy: StrategyId, rNet: number, t: number, btcAlign = 0, vol = 1
   const sent: string[] = [];
   const send = async (_s: any, p: any) => (sent.push(p.title), 'ok' as const);
   await runScan({ kv, klines, send, now: () => NOW });
-  const j = JSON.parse(mem.get(K.journal)!) as JournalEntry[];
+  const j = (await loadAll(kv, 'main', true)).journal;
   let bothOpen = 0, sameStrat = 0, realOverlap = 0;
   for (const p of pairs) {
     const xs = j.filter((e) => e.signal.symbol === p && e.signal.time > T0 + 100 * 3_600_000);
@@ -233,9 +253,10 @@ function tr(strategy: StrategyId, rNet: number, t: number, btcAlign = 0, vol = 1
     ok(before.learning, `before the scan Break & Retest is learning (${before.n}/${PROMOTE_MIN_TRADES})`);
     const got: string[] = [];
     await runScan({ kv: pk, klines, send: async (_s: any, p: any) => (got.push(p.title), 'ok' as const), now: () => NOW });
-    const jj = JSON.parse(pm.get(K.journal)!) as JournalEntry[];
+    const full = await loadAll(pk, 'main', true);
+    const jj = history(full.archive, full.journal, S);
     const after = playbookHealth(jj, S).BREAK_RETEST;
-    ok(jj.find((e) => e.signal.id === 'open-win')?.outcome === 'WIN' && !after.learning, `the 40th trade won and Break & Retest went live by itself (${after.n} trades, ${after.expectancyR.toFixed(2)}R avg)`);
+    ok(full.journal.find((e) => e.signal.id === 'open-win')?.outcome === 'WIN' && !after.learning, `the 40th trade won and Break & Retest went live by itself (${after.n} trades, ${after.expectancyR.toFixed(2)}R avg)`);
     ok(got.filter((t) => t.startsWith('New strategy live')).length === 1, `the promotion is announced on your devices once (${got.filter((t) => t.startsWith('New strategy')).join(' | ') || 'none'})`);
     got.length = 0;
     await runScan({ kv: pk, klines, send: async (_s: any, p: any) => (got.push(p.title), 'ok' as const), now: () => NOW + 5 * S5 });

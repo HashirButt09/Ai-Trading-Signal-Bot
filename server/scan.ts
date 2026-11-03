@@ -1,12 +1,15 @@
 import type { Candle, JournalEntry, Settings, Signal } from '../src/engine/types.js';
 import { buildHtf } from '../src/engine/regime.js';
 import { buildLtf, evaluate, WARMUP } from '../src/engine/strategies.js';
-import { advanceEntry, btcFilter, gate, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
+import { advanceEntry, applyExitPlan, btcFilter, exitReport, gate, isTracking, newEntry, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
+import { buildDigest, decodeLite, encodeLite, splitFinished, type Lite } from '../src/engine/archive.js';
+import { maintain, MAINT_EVERY_MS } from './maintain.js';
+import type { ExitPlanId, MarketCtx } from '../src/engine/types.js';
 import { PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type StrategyId } from '../src/engine/types.js';
 import { TF_MS } from '../src/engine/time.js';
 import { playName } from '../src/engine/names.js';
 import type { Kv } from './kv.js';
-import { cleanSettings, K, loadAll, PK, saveCmds, type ProfileStatus, type ServerStatus } from './store.js';
+import { cleanSettings, finishCmds, K, loadAll, loadStatus, PK, saveCmds, type ProfileStatus, type ServerStatus } from './store.js';
 import { MAIN, profileList, settingsFor } from '../src/engine/profiles.js';
 import type { MetaModel } from '../src/engine/meta.js';
 import { listSubs, type PushPayload, type Sender } from './push.js';
@@ -17,6 +20,8 @@ export interface ScanDeps {
   send: Sender;
   telegram?: (token: string, chatId: string, text: string) => Promise<void>;
   now?: () => number;
+  /** live funding rate and open interest change per symbol (optional; missing = unknown) */
+  market?: (symbols: string[]) => Promise<Record<string, MarketCtx>>;
 }
 
 export interface ScanReport {
@@ -79,7 +84,9 @@ export async function releaseLock(kv: Kv, token: string) {
 export const EXTRA_PROFILE_BUDGET_MS = 25_000;
 
 interface ProfileResult {
-  journal: JournalEntry[];
+  journal: JournalEntry[]; // trades still being followed
+  finished: JournalEntry[]; // trades that finished in this run (moved to the closed lists and the archive)
+  digest: Lite[] | null; // updated digest (null = unchanged)
   model: MetaModel | null;
   cursor: Record<string, number>;
   processed: string[];
@@ -101,7 +108,9 @@ async function scanProfile(
   cursor: Record<string, number>,
   now: number,
   fresh: Signal[],
-  errors: Record<string, string>
+  errors: Record<string, string>,
+  digestIn: Lite[] = [],
+  market: Record<string, MarketCtx> = {}
 ): Promise<ProfileResult> {
   let journal = journalIn;
   let model = modelIn;
@@ -135,9 +144,14 @@ async function scanProfile(
   await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);
 
 
-  let health = playbookHealth(journal, s);
+  // learning reads the recent results of every playbook (digest) plus the live journal
+  const archived = digestIn.map((r) => decodeLite(r, s));
+  const hist = () => (archived.length ? [...archived, ...journal] : journal);
+  let health = playbookHealth(hist(), s);
+  // exit lab: which exit plan each playbook uses for new trades (A unless another plan proved better)
+  const exitChoice = Object.fromEntries(Object.keys(health).map((k) => [k, exitReport(hist(), k as StrategyId, s).choice])) as Record<StrategyId, ExitPlanId>;
   const liveBefore = new Set(Object.values(health).filter((h) => PROBATION.has(h.strategy) && !h.learning).map((h) => h.strategy));
-  const btcState = btcFilter(journal, s);
+  const btcState = btcFilter(hist(), s);
   // BTC on the regime timeframe, so every altcoin setup records whether it went with or against BTC
   let btcH: ReturnType<typeof buildHtf> | null = null;
   {
@@ -166,10 +180,12 @@ async function scanProfile(
     const { L, H } = got;
     const key = `${sym}|${s.ltf}`;
     const last = cursor[key];
-    const isOpen = (e: JournalEntry) => e.signal.symbol === sym && e.outcome === 'OPEN' && e.signal.ltf === s.ltf;
+    const isOpen = (e: JournalEntry) => e.signal.symbol === sym && isTracking(e) && e.signal.ltf === s.ltf;
 
-    // open trades whose last applied candle is older than the history we fetched cannot be verified: drop them
-    journal = journal.filter((e) => !(isOpen(e) && (e.lastT ?? e.signal.time) + step < L[0].t));
+    // open trades whose last applied candle is older than the history we fetched cannot be verified: drop
+    // them (a closed trade whose exit-lab plans cannot be finished just leaves the exit lab)
+    const stale = (e: JournalEntry) => isOpen(e) && (e.lastT ?? e.signal.time) + step < L[0].t;
+    journal = journal.filter((e) => !(stale(e) && e.outcome === 'OPEN')).map((e) => (stale(e) ? { ...e, exits: undefined } : e));
 
     // first index that is new for signal search (first ever run: only the latest closed candle)
     const firstNew = last ? L.findIndex((k) => k.t > last) : L.length - 1;
@@ -191,14 +207,14 @@ async function scanProfile(
       const k = L[i];
       let nRes = 0;
       journal = journal.map((e) => {
-        if (e.signal.symbol !== sym || e.outcome !== 'OPEN' || e.signal.ltf !== s.ltf) return e;
+        if (e.signal.symbol !== sym || !isTracking(e) || e.signal.ltf !== s.ltf) return e;
         const n = advanceEntry(e, k, s);
-        if (n.outcome !== 'OPEN') nRes++;
+        if (e.outcome === 'OPEN' && n.outcome !== 'OPEN') nRes++;
         return n;
       });
       if (nRes) {
         out.resolvedNow += nRes;
-        health = playbookHealth(journal, s);
+        health = playbookHealth(hist(), s);
       }
     }
 
@@ -237,14 +253,14 @@ async function scanProfile(
 
       let nRes = 0;
       journal = journal.map((e) => {
-        if (e.signal.symbol !== sym || e.outcome !== 'OPEN' || e.signal.ltf !== s.ltf) return e;
+        if (e.signal.symbol !== sym || !isTracking(e) || e.signal.ltf !== s.ltf) return e;
         const n = advanceEntry(e, k, s);
-        if (n.outcome !== 'OPEN') nRes++;
+        if (e.outcome === 'OPEN' && n.outcome !== 'OPEN') nRes++;
         return n;
       });
       if (nRes) {
         out.resolvedNow += nRes;
-        health = playbookHealth(journal, s);
+        health = playbookHealth(hist(), s);
       }
 
       if (i < WARMUP) continue;
@@ -254,8 +270,10 @@ async function scanProfile(
       const blocking = openHere.filter((e) => !(e.status === 'PAUSED' && PROBATION.has(e.signal.strategy)));
       if (blocking.length) continue;
 
-      const r = evaluate(sym, item.lctx, i, item.hctx, s, btcH);
+      const r = evaluate(sym, item.lctx, i, item.hctx, s, btcH, market[sym]);
       if (!r.signal || ids.has(r.signal.id)) continue;
+      const plan = exitChoice[r.signal.strategy] ?? 'A';
+      if (plan !== 'A') r.signal = applyExitPlan(r.signal, plan);
       if (openHere.some((e) => e.signal.strategy === r.signal!.strategy)) continue;
       const g = gate(r.signal, model, health, s, btcState);
       r.signal.pWin = g.pWin;
@@ -287,7 +305,7 @@ async function scanProfile(
         status = 'FILTERED';
         item.signal.scenario = (item.signal.scenario ? item.signal.scenario + ' · ' : '') + 'max open trades / one new trade per candle';
       }
-      journal.push({ signal: item.signal, status, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: item.k.t });
+      journal.push(newEntry(item.signal, status, item.k.t));
       ids.add(item.signal.id);
       out.newSignals.push(`${item.signal.id}:${status}`);
       const closedAgo = now - (item.k.t + step);
@@ -295,7 +313,9 @@ async function scanProfile(
     }
 
     for (const item of otherSetups) {
-      journal.push({ signal: item.signal, status: item.g.status, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: item.k.t });
+      // paused / learning setups are tracked as numbers only: their write-up would be re-saved on every scan
+      const sig = item.g.status === 'PAUSED' ? { ...item.signal, scenario: '', drawing: undefined } : item.signal;
+      journal.push(newEntry(sig, item.g.status, item.k.t));
       ids.add(item.signal.id);
       out.newSignals.push(`${item.signal.id}:${item.g.status}`);
     }
@@ -306,7 +326,9 @@ async function scanProfile(
     out.processed.push(item.sym);
   }
 
-  if (out.resolvedNow && resolved(journal).length >= s.metaMinSamples) {
+  // a bot that has never been trained learns as soon as it has enough trades; after that the AI filter
+  // retrains every few hours on weeks of history (see maintain.ts)
+  if (out.resolvedNow && !model && resolved(journal).length >= s.metaMinSamples) {
     const m = retrain(journal, s, model);
     if (m) {
       model = m;
@@ -314,8 +336,12 @@ async function scanProfile(
     }
   }
 
+  // finished trades leave the live journal (to the closed lists and the archive); the digest learns them now
+  const split = splitFinished(journal);
+  journal = split.tracking;
+  const digest = split.finished.length ? buildDigest([...digestIn, ...split.finished.map(encodeLite)]) : null;
   const promoted = Object.values(health).filter((h) => PROBATION.has(h.strategy) && !h.learning && !liveBefore.has(h.strategy)).map((h) => h.strategy);
-  return { journal, model, cursor, ...out, prunedSymbols: invalidSymbols, errorCount: Object.keys(errors).length - errsBefore, promoted };
+  return { journal, finished: split.finished, digest, model, cursor, ...out, prunedSymbols: invalidSymbols, errorCount: Object.keys(errors).length - errsBefore, promoted };
 }
 
 export async function runScan(d: ScanDeps): Promise<ScanReport> {
@@ -324,7 +350,9 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
   const report: ScanReport = { processed: [], newSignals: [], notified: 0, resolvedNow: 0, retrained: false, errors: {}, profiles: {} };
 
   // quick check without the lock: is any profile due?
-  const [rawS, rawC] = await d.kv.pipe([['GET', K.settings], ['GET', K.cursor]]);
+  // quiet minutes cost two reads; every 10th minute also checks whether archive upkeep is overdue
+  const checkUpkeep = Math.floor(now / 60_000) % 10 === 3;
+  const [rawS, rawC, rawSt] = await d.kv.pipe([['GET', K.settings], ['GET', K.cursor], ...(checkUpkeep ? [['GET', K.status]] : [])]);
   {
     let s0: Settings;
     let c0: Record<string, number>;
@@ -349,7 +377,42 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
         return dueSymbols(settingsFor(s0, p.id), c, now).length > 0;
       });
     }
-    if (!anyDue) return { ...report, skipped: 'nothing-due' };
+    if (!anyDue) {
+      // a quiet minute: do any overdue archive tidy-up + retrain here, so it never competes with a scan
+      let maint: Record<string, number> = {};
+      try {
+        maint = (rawSt ? JSON.parse(rawSt) : {}).maint ?? {};
+      } catch {
+        /* none yet */
+      }
+      const overdue = checkUpkeep ? profileList(s0).filter((p) => now - (maint[p.id] ?? 0) >= MAINT_EVERY_MS) : [];
+      if (!overdue.length) return { ...report, skipped: 'nothing-due' };
+      const lock = await acquireLock(d.kv);
+      if (!lock) return { ...report, skipped: 'locked' };
+      try {
+        const st0 = await loadAll(d.kv);
+        const maintAt = { ...(st0.status.maint ?? {}) };
+        const av = { ...(st0.status.av ?? {}) };
+        let retrained = false;
+        for (const p of overdue) {
+          const one = p.id === MAIN ? st0 : await loadAll(d.kv, p.id);
+          try {
+            const m = await maintain(d.kv, p.id, settingsFor(st0.settings, p.id), one.live, one.model, now);
+            maintAt[p.id] = now;
+            av[p.id] = (av[p.id] ?? 0) + 1;
+            retrained ||= m.retrained;
+            if (p.id === MAIN) report.retrained = m.retrained;
+          } catch (e: any) {
+            report.errors[`maintenance (${p.id})`] = String(e?.message ?? e).slice(0, 160);
+          }
+        }
+        const cur = await loadStatus(d.kv);
+        await d.kv.pipe(saveCmds({ status: { ...cur, maint: maintAt, av, ver: cur.ver + (retrained ? 1 : 0) } }));
+      } finally {
+        await releaseLock(d.kv, lock);
+      }
+      return { ...report, skipped: 'nothing-due' };
+    }
   }
 
   const lock = await acquireLock(d.kv);
@@ -363,7 +426,11 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
     settings = shared.settings;
     st = shared.status;
     let changed = false;
+    // live funding / open interest once per run for every pair (best effort: missing = unknown)
+    const market = d.market ? await d.market(settings.watchlist).catch(() => ({})) : {};
     const profStatus: Record<string, ProfileStatus> = { ...(st.profiles ?? {}) };
+    const maintAt: Record<string, number> = { ...(st.maint ?? {}) };
+    const archiveVer: Record<string, number> = { ...(st.av ?? {}) };
     promotions.length = 0;
     for (const prof of profileList(settings)) {
       // the main bot always runs; an extra bot waits for the next minute if this run is already long
@@ -372,12 +439,29 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
         continue;
       }
       const state = prof.id === MAIN ? shared : await loadAll(d.kv, prof.id);
-      const r = await scanProfile(d, prof.id, settings, state.journal, state.model, state.cursor, now, fresh, report.errors);
+      const r = await scanProfile(d, prof.id, settings, state.journal, state.model, state.cursor, now, fresh, report.errors, state.digest, market);
       if (r.prunedSymbols.length) {
         settings.watchlist = settings.watchlist.filter((x) => !r.prunedSymbols.includes(x));
         await d.kv.pipe(saveCmds({ settings }));
       }
-      await d.kv.pipe(saveCmds({ journal: r.journal, model: r.retrained ? r.model : undefined, cursor: r.cursor, profile: prof.id }));
+      await d.kv.pipe([
+        ...saveCmds({ journal: r.journal, model: r.retrained ? r.model : undefined, cursor: r.cursor, profile: prof.id, digest: r.digest ?? undefined }),
+        ...finishCmds(r.finished, prof.id)
+      ]);
+      // every few hours: tidy the archive, rebuild the digest, retrain the AI on weeks of trades
+      if (now - (maintAt[prof.id] ?? 0) >= MAINT_EVERY_MS && Date.now() - started < 15_000) {
+        try {
+          const m = await maintain(d.kv, prof.id, settingsFor(settings, prof.id), r.journal, r.model, now);
+          maintAt[prof.id] = now;
+          archiveVer[prof.id] = (archiveVer[prof.id] ?? 0) + 1;
+          if (m.retrained) {
+            changed = true;
+            if (prof.id === MAIN) report.retrained = true;
+          }
+        } catch (e: any) {
+          report.errors[`maintenance (${prof.id})`] = String(e?.message ?? e).slice(0, 160);
+        }
+      }
       if (r.newSignals.length || r.resolvedNow || r.retrained) changed = true;
       for (const k of r.promoted) promotions.push({ bot: prof.label, strategy: k });
       report.profiles![prof.id] = { processed: r.processed, newSignals: r.newSignals, resolvedNow: r.resolvedNow, retrained: r.retrained };
@@ -398,7 +482,9 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
       errors: report.errors,
       lastError: Object.keys(report.errors).length ? `${Object.keys(report.errors).length} pair(s) failed: ${Object.values(report.errors)[0]}` : '',
       lastSignalAt: fresh.length ? now : st.lastSignalAt,
-      profiles: profStatus
+      profiles: profStatus,
+      maint: maintAt,
+      av: archiveVer
     };
     await d.kv.pipe(saveCmds({ status: st }));
   } finally {

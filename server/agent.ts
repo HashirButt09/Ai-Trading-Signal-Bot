@@ -24,6 +24,7 @@ import { computeProgress, computeWeeklySummary } from '../src/engine/progress.js
 import type { Kv } from './kv.js';
 import { K, loadAll, PK, saveCmds } from './store.js';
 import { MAIN, profileLabel, settingsFor, withTuned } from '../src/engine/profiles.js';
+import { history } from '../src/engine/archive.js';
 import { acquireLock, releaseLock } from './scan.js';
 import { listSubs, type Sender } from './push.js';
 import type { GeminiJson } from './gemini.js';
@@ -359,9 +360,12 @@ export async function runAgent(d: AgentDeps, trigger: 'cron' | 'manual' = 'cron'
   const days = d.days ?? 30;
   const notes: string[] = [];
   const state = await loadAgent(d.kv, profile);
-  const { settings: shared, journal } = await loadAll(d.kv, profile);
+  const loaded = await loadAll(d.kv, profile, true);
+  const shared = loaded.settings;
   // this profile's own timeframes and tuned values; risk, pairs and floors are shared
   const settings = settingsFor(shared, profile);
+  // weeks of closed trades (compact archive) plus the live journal
+  const journal = history(loaded.archive, loaded.journal, settings);
   const tag = profile === MAIN ? '' : profileLabel(shared, profile);
   const say = (title: string, body: string) => notify(d.kv, d.send, title, body, tag);
   const validJournal = journal.filter((e) => !isIgnored(e, settings));

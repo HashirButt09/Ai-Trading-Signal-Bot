@@ -7,22 +7,29 @@ import type { MetaModel } from '../engine/meta';
 import { playbookHealth, type PlaybookHealth } from '../engine/journal';
 import { settingsFor } from '../engine/profiles';
 import { getState, postState } from './server';
+import { history, type Rec } from '../engine/archive';
 import type { Scanner } from './scanner';
 
 export class ProfileFeed {
   journal: JournalEntry[] = [];
+  archive: Rec[] = [];
   model: MetaModel | null = null;
   health: Record<StrategyId, PlaybookHealth>;
   version = 0;
   loaded = false;
   error = '';
   private ver = -1;
+  private av = -1;
   private timer: ReturnType<typeof setInterval> | null = null;
   private listeners = new Set<() => void>();
   private busy: Promise<void> | null = null;
 
   constructor(public id: string, private getSettings: () => Settings) {
     this.health = playbookHealth([], settingsFor(getSettings(), id));
+  }
+
+  get history(): JournalEntry[] {
+    return this.archive.length ? history(this.archive, this.journal, this.settings) : this.journal;
   }
 
   get settings(): Settings {
@@ -59,13 +66,15 @@ export class ProfileFeed {
     const pass = this.getSettings().reviewPasscode;
     if (!pass) return;
     try {
-      const r = await getState(pass, this.ver, this.id);
+      const r = await getState(pass, this.ver, this.id, this.av);
       this.error = '';
       if (!r.unchanged && r.journal && r.profile === this.id) {
         this.journal = r.journal;
+        if (r.archive) this.archive = r.archive;
+        if (r.av !== undefined) this.av = r.av;
         this.model = r.model ?? null;
         this.ver = r.status.ver;
-        this.health = playbookHealth(this.journal, this.settings);
+        this.health = playbookHealth(this.history, this.settings);
         this.loaded = true;
       }
     } catch (e: any) {
@@ -78,6 +87,7 @@ export class ProfileFeed {
     try {
       await postState(this.getSettings().reviewPasscode, { ...body, profile: this.id });
       this.ver = -1;
+      this.av = -1;
       await this.poll();
     } catch (e: any) {
       this.error = e?.message ?? String(e);
@@ -95,6 +105,8 @@ export function viewOf(scanner: Scanner, feed: ProfileFeed): Scanner {
   Object.defineProperties(v, {
     viewProfile: { get: () => feed.id },
     journal: { get: () => feed.journal },
+    archive: { get: () => feed.archive },
+    history: { get: () => feed.history },
     model: { get: () => feed.model },
     health: { get: () => feed.health },
     version: { get: () => scanner.version * 100_000 + feed.version },

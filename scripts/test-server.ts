@@ -1,10 +1,12 @@
 // Server-side always-on scanner: fake Binance + fake Upstash (via the real REST client) + fake push service.
-import { DEFAULT_SETTINGS, type Candle } from '../src/engine/types';
+import { DEFAULT_SETTINGS, PROBATION, type Candle } from '../src/engine/types';
 import { TF_MS } from '../src/engine/time';
 import { advanceEntry } from '../src/engine/journal';
 import { memoryKv, restKv } from '../server/kv';
 import { runScan } from '../server/scan';
-import { K, trimJournal } from '../server/store';
+import { K, loadAll, trimJournal } from '../server/store';
+// every recent trade of the main bot: closed ones (filed away after each scan) + still open
+const allOf = async (m: any) => (await loadAll(m, 'main', true)).journal as any[];
 import { setSub, type PushSub } from '../server/push';
 
 let fails = 0;
@@ -68,7 +70,7 @@ const send = async (sub: PushSub, p: any) => {
 };
 
 // these checks are about the established playbooks; the learning-mode ones have their own test file
-const OLD_ONLY = { ...DEFAULT_SETTINGS.enabled, BREAK_RETEST: false, VWAP_RECLAIM: false, ORDER_BLOCK: false, BB_SQUEEZE: false };
+const OLD_ONLY = Object.fromEntries(Object.keys(DEFAULT_SETTINGS.enabled).map((k) => [k, !PROBATION.has(k as any)])) as typeof DEFAULT_SETTINGS.enabled;
 const settings = { ...DEFAULT_SETTINGS, enabled: OLD_ONLY, profiles: [], watchlist: ['AAAUSDT', 'BBBUSDT'], metaMinSamples: 30, telegramToken: 'tg', telegramChatId: '1', ignoreBefore: 0 };
 await mem.cmd('SET', K.settings, JSON.stringify(settings));
 await setSub(kv, phone, ['AAAUSDT']); // bell on for AAA only
@@ -107,18 +109,18 @@ const t0 = Date.now();
 while (NOW < T0 + 8990 * S5) {
   NOW += 60_000;
   if (NOW > outageStart && NOW < outageEnd) continue; // pinger down
-  const before = JSON.parse(mem.data.get(K.journal) ?? '[]').length;
+  const before = (await allOf(mem)).length;
   const r = await runScan(deps);
   ticks++;
   if (NOW >= outageEnd && NOW < outageEnd + 60_000) {
-    outageSignals = JSON.parse(mem.data.get(K.journal) ?? '[]').length - before;
+    outageSignals = (await allOf(mem)).length - before;
     sentBefore.set('outage', sent.length);
     ok(r.processed.length === 2, 'first tick after the outage catches up on both pairs');
   }
 }
 console.log(`  simulated ${ticks} ticks in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
-const journal = JSON.parse(mem.data.get(K.journal) ?? '[]') as any[];
+const journal = (await allOf(mem)) as any[];
 const done = journal.filter((e) => e.outcome !== 'OPEN');
 console.log(`  journal: ${journal.length} signals, ${done.length} resolved, ${journal.filter((e) => e.status === 'ACTIVE').length} active, pushes ${sent.length}, telegram ${tg}`);
 ok(journal.length > 20, 'server keeps producing signals with the app closed');
@@ -127,7 +129,7 @@ ok(new Set(journal.map((e) => e.signal.id)).size === journal.length, 'no duplica
 // every resolved trade must match a full candle-by-candle replay (including those spanning the outage)
 let match = 0;
 for (const e of done) {
-  let ref: any = { ...e, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: undefined, resolvedAt: undefined };
+  let ref: any = { ...e, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: undefined, resolvedAt: undefined, be: undefined, exits: undefined, mfeR: undefined, maeR: undefined };
   for (const k of market[e.signal.symbol].m5) {
     ref = advanceEntry(ref, k, settings);
     if (ref.outcome !== 'OPEN') break;
@@ -143,7 +145,13 @@ for (const sym of ['AAAUSDT', 'BBBUSDT']) {
   const xs = journal.filter((e) => e.signal.symbol === sym).sort((a, b) => a.signal.time - b.signal.time);
   for (let i = 1; i < xs.length; i++) if (xs[i - 1].outcome === 'OPEN' || xs[i].signal.time < xs[i - 1].resolvedAt) overlaps++;
 }
-ok(overlaps === 0, 'never two open signals on the same pair');
+ok(overlaps === 0, `never two open signals on the same pair (${overlaps})`);
+if (overlaps) {
+  for (const sym of ['AAAUSDT', 'BBBUSDT']) {
+    const xs = journal.filter((e) => e.signal.symbol === sym).sort((a, b) => a.signal.time - b.signal.time);
+    for (let i = 1; i < xs.length; i++) if (xs[i - 1].outcome === 'OPEN' || xs[i].signal.time < xs[i - 1].resolvedAt) { console.log('   overlap', xs[i - 1].signal.id, xs[i - 1].status, xs[i - 1].outcome, xs[i - 1].resolvedAt, '->', xs[i].signal.id, xs[i].status); break; }
+  }
+}
 
 const model = JSON.parse(mem.data.get(K.model) ?? 'null');
 ok(model && model.n >= 30, `model retrained on the server (${model?.n ?? 0} samples)`);
@@ -152,7 +160,7 @@ ok(journal.some((e) => e.signal.pWin !== undefined), 'new signals are scored by 
 // notifications
 const activeAAA = journal.filter((e) => e.status === 'ACTIVE' && e.signal.symbol === 'AAAUSDT');
 ok(sent.length > 0 && sent.every((s) => s.to === phone.endpoint), 'pushes go only to live subscriptions');
-ok(sent.every((s) => s.tag.startsWith('AAAUSDT')), 'only the pair with the bell on (AAA) is pushed, BBB stays silent');
+ok(sent.every((s) => s.tag.startsWith('AAAUSDT')), `only the pair with the bell on (AAA) is pushed, BBB stays silent${sent.some((s) => !s.tag.startsWith('AAAUSDT')) ? ' — got ' + [...new Set(sent.filter((s) => !s.tag.startsWith('AAAUSDT')).map((s) => s.tag + ' ' + s.title))].slice(0, 3).join(' | ') : ''}`);
 ok(sent.length <= activeAAA.length, `pushed ${sent.length} of ${activeAAA.length} active AAA signals (stale catch-up ones are not pushed)`);
 const staleCatchup = journal.filter((e) => e.signal.time >= outageStart - S5 && e.signal.time + 2 * S5 < outageEnd);
 const staleActive = staleCatchup.filter((e) => e.status === 'ACTIVE').length;
@@ -296,7 +304,7 @@ ok(!mem.data.has(K.lock), 'lock released after a failed tick');
 
   await runScan({ kv: diffKv, klines: diffKlines, send, now: () => diffNow });
 
-  const afterJournal = JSON.parse(diffMem.data.get(K.journal) ?? '[]') as JournalEntry[];
+  const afterJournal = (await allOf(diffMem)) as JournalEntry[];
   const highTrade = afterJournal.find((e) => e.signal.id === 'high-sig-1');
   const lowTrade = afterJournal.find((e) => e.signal.id === 'low-sig-1');
 
@@ -330,7 +338,7 @@ ok(!mem.data.has(K.lock), 'lock released after a failed tick');
 
   const guardDeps = { kv: guardKv, klines: guardKlines, send, now: () => guardNow };
   const rep = await runScan(guardDeps);
-  const guardJournal = JSON.parse(guardMem.data.get(K.journal) ?? '[]') as any[];
+  const guardJournal = (await allOf(guardMem)) as any[];
   const activeOpens = guardJournal.filter((e) => e.outcome === 'OPEN' && e.status === 'ACTIVE');
   const filteredOpens = guardJournal.filter((e) => e.outcome === 'OPEN' && e.status === 'FILTERED');
   ok(
@@ -402,7 +410,7 @@ ok(!mem.data.has(K.lock), 'lock released after a failed tick');
 
   await runScan({ kv: testCKv, klines: cKlines, send, now: () => cNow });
 
-  const jAfter = JSON.parse(testCMem.data.get(K.journal) ?? '[]') as JournalEntry[];
+  const jAfter = (await allOf(testCMem)) as JournalEntry[];
   const bbbTrade = jAfter.find((e) => e.signal.symbol === 'BBBUSDT' && e.signal.time === targetSignalTime);
   ok(
     bbbTrade && bbbTrade.status === 'ACTIVE' && bbbTrade.outcome === 'OPEN',

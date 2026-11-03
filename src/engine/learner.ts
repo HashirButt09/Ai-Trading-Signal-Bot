@@ -23,6 +23,7 @@ const DAY = 86_400_000;
 export const RECIPES: ModelKind[] = ['recent', 'longterm', 'weighted'];
 const TRACK = 150; // predictions kept in each track record
 const MIN_TRACK = 30; // a contender needs this many scored predictions before it can take over
+const MAX_TRAIN = 4000; // newest closed trades used for training (keeps a retrain fast)
 const rt = (e: JournalEntry) => e.resolvedAt ?? e.signal.time;
 const win = (e: JournalEntry) => (e.rNet > 0 ? 1 : 0);
 const clip = (p: number) => Math.min(1 - 1e-6, Math.max(1e-6, p));
@@ -88,7 +89,8 @@ export interface LearnResult {
 export function retrainGated(list: JournalEntry[], s: Settings, current: MetaModel | null): LearnResult {
   const done = resolved(list)
     .filter((e) => !isIgnored(e, s))
-    .sort((a, b) => rt(a) - rt(b));
+    .sort((a, b) => rt(a) - rt(b))
+    .slice(-MAX_TRAIN);
   if (done.length < s.metaMinSamples) return { model: current, changed: false };
   const newest = rt(done[done.length - 1]);
   const fresh = !current || !current.recipes; // first model, or one saved by an older version

@@ -46,9 +46,10 @@ import { ALL_STRATEGIES } from './types.js';
 import { PATTERN_INFO } from './patterns.js';
 // Feature order never changes for existing inputs: the first 10 playbooks, then the candle read, then
 // everything added later. Models trained before a feature existed simply ignore it.
-const LEGACY = 10;
-const STRATS: StrategyId[] = ALL_STRATEGIES.slice(0, LEGACY);
-const LATER: StrategyId[] = ALL_STRATEGIES.slice(LEGACY);
+const STRATS: StrategyId[] = ALL_STRATEGIES.slice(0, 10); // the original playbooks
+const LATER: StrategyId[] = ALL_STRATEGIES.slice(10, 14); // learning batch 1
+const LATER2: StrategyId[] = ALL_STRATEGIES.slice(14); // learning batch 2
+const clip = (x: number | undefined, lim: number) => Math.max(-lim, Math.min(lim, x ?? 0));
 
 export function featurize(s: Signal): number[] {
   const f = s.features;
@@ -68,7 +69,14 @@ export function featurize(s: Signal): number[] {
     candleAgree(s),
     // added later (appended so older models stay valid)
     ...LATER.map((k) => (s.strategy === k ? 1 : 0)),
-    f.btcAlign ?? 0
+    f.btcAlign ?? 0,
+    // batch 2: more playbooks and market context (funding, open interest, BTC volatility, yesterday's levels)
+    ...LATER2.map((k) => (s.strategy === k ? 1 : 0)),
+    clip(f.funding, 20),
+    clip(f.oiChg, 10),
+    clip(f.btcVol, 5),
+    clip(f.pdhDist, 10),
+    clip(f.pdlDist, 10)
   ];
 }
 

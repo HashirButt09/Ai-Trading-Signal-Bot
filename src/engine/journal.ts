@@ -1,4 +1,4 @@
-import { ALL_STRATEGIES, isIgnored, PROBATION, PROMOTE_MIN_TRADES, type Candle, type JournalEntry, type Outcome, type Settings, type Signal, type StrategyId } from './types.js';
+import { ALL_STRATEGIES, EXIT_PLANS, isIgnored, PROBATION, PROMOTE_MIN_TRADES, type Candle, type ExitPlanId, type JournalEntry, type Outcome, type PlanState, type Settings, type Signal, type StrategyId } from './types.js';
 import { featurize, predictMeta, trainMeta, type MetaModel, type Sample } from './meta.js';
 import { effectiveThreshold, retrainGated } from './learner.js';
 
@@ -26,34 +26,119 @@ export function netR(sig: Signal, outcome: Outcome, closeAtExpiry: number | null
   return 0;
 }
 
+/** one exit plan's result on one candle: stop first if both are touched (conservative) */
+function stepPlan(sig: Signal, tp: number, beAtR: number | undefined, st: PlanState, k: Candle, bars: number, s: Settings): PlanState {
+  if (st.outcome !== 'OPEN') return st;
+  const long = sig.side === 'LONG';
+  const dir = long ? 1 : -1;
+  const risk = Math.abs(sig.entry - sig.sl) || 1e-12;
+  const cost = costR(sig, s);
+  const stop = st.be ? sig.entry + dir * cost * risk : sig.sl; // break-even stop: closes at about 0R after costs
+  const hitSl = long ? k.l <= stop : k.h >= stop;
+  const hitTp = long ? k.h >= tp : k.l <= tp;
+  if (hitSl) return { ...st, outcome: st.be ? 'EXPIRED' : 'LOSS', rNet: st.be ? 0 : -1 - cost, resolvedAt: k.t };
+  if (hitTp) return { ...st, outcome: 'WIN', rNet: Math.abs(tp - sig.entry) / risk - cost, resolvedAt: k.t };
+  if (bars >= MAX_BARS_OPEN) return { ...st, outcome: 'EXPIRED', rNet: (dir * (k.c - sig.entry)) / risk - cost, resolvedAt: k.t };
+  // arm the break-even stop for the NEXT candles once price has gone far enough in favour
+  if (beAtR && !st.be && (long ? k.h - sig.entry : sig.entry - k.l) / risk >= beAtR) return { ...st, be: true };
+  return st;
+}
+
+/** still being followed: the trade itself, or any exit plan of the exit lab */
+export const isTracking = (e: JournalEntry) => e.outcome === 'OPEN' || EXIT_PLANS.some((p) => e.exits?.[p]?.outcome === 'OPEN');
+
+/** a fresh journal entry; the exit lab follows all four plans when the signal has them */
+export function newEntry(signal: Signal, status: JournalEntry['status'], lastT?: number): JournalEntry {
+  const e: JournalEntry = { signal, status, outcome: 'OPEN', rNet: 0, barsOpen: 0, ...(lastT !== undefined ? { lastT } : {}) };
+  if (signal.plans) e.exits = Object.fromEntries(EXIT_PLANS.map((p) => [p, { outcome: 'OPEN', rNet: 0 }])) as JournalEntry['exits'];
+  return e;
+}
+
+/** switch a signal to one of its exit plans (target, R multiple and break-even rule) */
+export function applyExitPlan(sig: Signal, plan: ExitPlanId): Signal {
+  const lv = sig.plans?.[plan];
+  if (!lv) return sig;
+  const risk = Math.abs(sig.entry - sig.sl) || 1e-12;
+  const rr = Math.abs(lv.tp - sig.entry) / risk;
+  return { ...sig, tp: lv.tp, rr, beAtR: lv.beAtR, exitPlan: plan, features: { ...sig.features, rr } };
+}
+
 /**
- * Advance an open entry by one CLOSED candle that came after the signal candle.
- * If a single candle touches both stop and target we assume the stop hit first (conservative).
+ * Advance an entry by one CLOSED candle that came after the signal candle: the trade itself and every
+ * exit-lab plan still open. If a single candle touches both stop and target we assume the stop hit first.
  */
 export function advanceEntry(e: JournalEntry, k: Candle, s: Settings): JournalEntry {
   const from = e.lastT ?? e.signal.time;
-  if (e.outcome !== 'OPEN' || k.t <= from) return e; // already applied (safe to replay candles)
+  if (!isTracking(e) || k.t <= from) return e; // already applied (safe to replay candles)
   const sig = e.signal;
+  let out: JournalEntry = { ...e, lastT: k.t };
+  if (e.exits && sig.plans) {
+    const bars = (e.labBars ?? e.barsOpen) + 1;
+    const exits = { ...e.exits };
+    for (const p of EXIT_PLANS) {
+      const st = exits[p];
+      if (st) exits[p] = stepPlan(sig, sig.plans[p].tp, sig.plans[p].beAtR, st, k, bars, s);
+    }
+    out = { ...out, exits, labBars: bars };
+  }
+  if (e.outcome !== 'OPEN') return out;
   const long = sig.side === 'LONG';
-  const hitSl = long ? k.l <= sig.sl : k.h >= sig.sl;
+  const risk = Math.abs(sig.entry - sig.sl) || 1e-12;
+  const stop = e.be ? sig.entry + (long ? 1 : -1) * costR(sig, s) * risk : sig.sl;
+  const hitSl = long ? k.l <= stop : k.h >= stop;
   const hitTp = long ? k.h >= sig.tp : k.l <= sig.tp;
   const bars = e.barsOpen + 1;
-  const risk = Math.abs(sig.entry - sig.sl) || 1e-12;
   const fav = (long ? k.h - sig.entry : sig.entry - k.l) / risk;
   const adv = (long ? sig.entry - k.l : k.h - sig.entry) / risk;
   const base = {
-    ...e,
+    ...out,
     barsOpen: bars,
-    lastT: k.t,
     // capped at the exit levels: past the stop/target the trade is already closed
     // on the stop-out candle we assume the stop came first, so its high/low in favour does not count
     mfeR: +Math.max(e.mfeR ?? 0, hitSl ? 0 : Math.min(fav, sig.rr)).toFixed(3),
     maeR: +Math.max(e.maeR ?? 0, Math.min(adv, 1)).toFixed(3)
   };
+  if (hitSl && e.be) return { ...base, outcome: 'EXPIRED', rNet: 0, resolvedAt: k.t }; // closed at break-even
   if (hitSl) return { ...base, outcome: 'LOSS', rNet: netR(sig, 'LOSS', null, s), resolvedAt: k.t };
   if (hitTp) return { ...base, outcome: 'WIN', rNet: netR(sig, 'WIN', null, s), resolvedAt: k.t };
   if (bars >= MAX_BARS_OPEN) return { ...base, outcome: 'EXPIRED', rNet: netR(sig, 'EXPIRED', k.c, s), resolvedAt: k.t };
+  if (sig.beAtR && !e.be && fav >= sig.beAtR) return { ...base, be: true };
   return base;
+}
+
+/** a resolved trade whose exit-lab plans have all finished too */
+const labDone = (e: JournalEntry) => !!e.exits && EXIT_PLANS.every((p) => e.exits![p] && e.exits![p]!.outcome !== 'OPEN');
+
+export interface ExitReport {
+  n: number; // independent setups with every plan finished
+  plans: Record<ExitPlanId, { avgR: number; winRate: number }>;
+  choice: ExitPlanId; // the plan new trades of this playbook use
+  needR: number; // how much better than A a plan must be to take over
+}
+
+/**
+ * Exit lab verdict for one playbook: plan A (its own rule) stays unless another plan beat it clearly on
+ * the last 60 independent setups (at least 40), by more than noise.
+ */
+export function exitReport(list: JournalEntry[], strategy: StrategyId, s: Settings): ExitReport {
+  const done = list
+    .filter((e) => e.signal.strategy === strategy && labDone(e) && !isIgnored(e, s))
+    .sort((a, b) => (a.resolvedAt ?? a.signal.time) - (b.resolvedAt ?? b.signal.time));
+  const groups = clusters(done).slice(-60);
+  const n = groups.length;
+  const plans = {} as ExitReport['plans'];
+  for (const p of EXIT_PLANS) {
+    const rs = groups.map((g) => g.reduce((a, e) => a + (e.exits![p]!.rNet ?? 0), 0) / g.length);
+    const st = computeStats(rs);
+    plans[p] = { avgR: st.avgR, winRate: st.winRate };
+  }
+  const needR = Math.max(0.1, 0.6 / Math.sqrt(Math.max(1, n)));
+  let choice: ExitPlanId = 'A';
+  if (n >= PROMOTE_MIN_TRADES) {
+    const best = EXIT_PLANS.reduce((a, b) => (plans[b].avgR > plans[a].avgR ? b : a));
+    if (best !== 'A' && plans[best].avgR >= plans.A.avgR + needR) choice = best;
+  }
+  return { n, plans, choice, needR };
 }
 
 export interface Stats {
@@ -216,10 +301,10 @@ export interface BtcFilter {
 }
 export const BTC_FILTER_MIN = 30;
 export function btcFilter(list: JournalEntry[], s: Settings): BtcFilter {
-  const done = resolved(list).filter((e) => !isIgnored(e, s) && e.signal.features.btcAlign !== undefined);
+  const done = resolved(list).filter((e) => !isIgnored(e, s) && e.signal.features?.btcAlign !== undefined);
   const groups = (xs: JournalEntry[]) => clusters(xs).map((c) => c.reduce((a, e) => a + e.rNet, 0) / c.length);
-  const against = groups(done.filter((e) => e.signal.features.btcAlign === -1).slice(-200));
-  const other = groups(done.filter((e) => (e.signal.features.btcAlign ?? 0) >= 0).slice(-200));
+  const against = groups(done.filter((e) => e.signal.features?.btcAlign === -1).slice(-200));
+  const other = groups(done.filter((e) => (e.signal.features?.btcAlign ?? 0) >= 0).slice(-200));
   const a = computeStats(against), o = computeStats(other);
   const margin = Math.max(0.15, 0.6 / Math.sqrt(Math.max(1, a.n)));
   return { active: a.n >= BTC_FILTER_MIN && o.n >= BTC_FILTER_MIN && a.avgR < o.avgR - margin && a.avgR < 0, nAgainst: a.n, avgAgainst: a.avgR, nOther: o.n, avgOther: o.avgR };

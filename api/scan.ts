@@ -6,7 +6,7 @@
  * Env: CRON_SECRET, UPSTASH_REDIS_REST_URL/TOKEN (or KV_REST_API_URL/TOKEN),
  *      VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (for push notifications).
  */
-import { fetchKlines } from '../src/lib/binance.js';
+import { fetchKlines, fetchMarketCtx } from '../src/lib/binance.js';
 import { checkCron, json } from '../server/http.js';
 import { kvConfig, restKv } from '../server/kv.js';
 import { runScan } from '../server/scan.js';
@@ -30,6 +30,7 @@ async function handle(req: Request): Promise<Response> {
     const report = await runScan({
       kv: restKv(cfg.url, cfg.token),
       klines: (s, i, n) => fetchKlines(s, i, n),
+      market: (syms) => fetchMarketCtx(syms),
       send: vapidReady() ? webPushSender : async () => 'VAPID keys not set',
       telegram
     });

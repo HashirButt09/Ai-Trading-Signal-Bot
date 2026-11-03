@@ -21,11 +21,12 @@ import { Backtest } from './components/Backtest';
 import { Journal } from './components/Journal';
 import { Settings as SettingsPage } from './components/Settings';
 import { BotSwitch, Compare } from './components/Compare';
+import { Results } from './components/Results';
 import { useProfiles } from './lib/useProfiles';
 import { MAIN } from './engine/profiles';
 
-type Tab = 'live' | 'trades' | 'journal' | 'learn' | 'backtest' | 'settings';
-const TAB_LABEL: Record<Tab, string> = { live: 'Live', trades: 'Trades', journal: 'AI & journal', learn: 'Learn', backtest: 'Backtest', settings: 'Settings' };
+type Tab = 'live' | 'trades' | 'results' | 'journal' | 'learn' | 'backtest' | 'settings';
+const TAB_LABEL: Record<Tab, string> = { live: 'Live', trades: 'Trades', results: 'Results', journal: 'AI & journal', learn: 'Learn', backtest: 'Backtest', settings: 'Settings' };
 
 export default function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
@@ -214,7 +215,7 @@ export default function App() {
         </div>
       )}
       {srv.mode === 'on' && srv.info?.status.lastError && <div className="banner">Server scan problem: {srv.info.status.lastError}</div>}
-      {(tab === 'live' || tab === 'trades' || tab === 'journal') && (
+      {(tab === 'live' || tab === 'trades' || tab === 'results' || tab === 'journal') && (
         <BotSwitch bots={prof.bots} value={prof.viewId} onChange={(id) => { prof.setView(id); setSelId(null); setTfSel('ltf'); }} />
       )}
 
@@ -284,6 +285,7 @@ export default function App() {
         </main>
       )}
       {tab === 'backtest' && <Backtest scanner={scanner} onImport={(id, entries) => (id === MAIN ? scanner.importTrades(entries) : void prof.feedOf(id)?.action({ action: 'import', entries, seed: true }))} />}
+      {tab === 'results' && <Results scanner={vs} onShow={showTrade} />}
       {tab === 'trades' && <Trades scanner={vs} settings={vset} onShow={showTrade} onLearn={openLearn} />}
       {tab === 'learn' && <Learn focus={learnId} onFocus={setLearnId} />}
       {tab === 'journal' && (

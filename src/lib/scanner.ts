@@ -9,6 +9,7 @@ import { loadJournal, loadModel, saveJournal, saveModel } from './storage';
 import { alertSignal } from './notify';
 import type { StrategyId } from '../engine/types';
 import { getState, postState, ServerError, serverSettings, settingsKey, type StateResponse } from './server';
+import { history, type Rec } from '../engine/archive';
 
 export type ServerMode = 'off' | 'connecting' | 'on' | 'error';
 export interface ServerView {
@@ -57,6 +58,13 @@ export class Scanner {
   remote = false;
   /** which timeframe bot these numbers belong to ('main' here; a ProfileFeed view says '15m') */
   viewProfile = 'main';
+  /** the server's compact archive of older closed trades */
+  archive: Rec[] = [];
+  private av = -1;
+  /** everything learning and the stats pages use: archive + live journal */
+  get history(): JournalEntry[] {
+    return this.archive.length ? history(this.archive, this.journal, this.settings) : this.journal;
+  }
   server: ServerView = { mode: 'off', error: '', info: null, checkedAt: 0 };
   private ver = -1;
   private priceTimer: ReturnType<typeof setInterval> | null = null;
@@ -151,7 +159,7 @@ export class Scanner {
     const pass = this.settings.reviewPasscode;
     let r: StateResponse;
     try {
-      r = await getState(pass, this.remote ? this.ver : -1);
+      r = await getState(pass, this.remote ? this.ver : -1, undefined, this.remote ? this.av : -1);
     } catch (e) {
       const err = e as ServerError;
       if (this.remote && (err.code === 'offline' || err.status >= 500 && err.code !== 'no_redis' && err.code !== 'no_passcode')) {
@@ -192,9 +200,11 @@ export class Scanner {
       }
       r.journal.forEach((e) => this.seen.add(e.signal.id));
       this.journal = r.journal;
+      if (r.archive) this.archive = r.archive; // otherwise unchanged since our copy
+      if (r.av !== undefined) this.av = r.av;
       this.model = r.model ?? null;
       this.ver = r.status.ver;
-      this.health = playbookHealth(this.journal, this.settings);
+      this.health = playbookHealth(this.history, this.settings);
       if (r.settings) this.serverKey = settingsKey(r.settings);
     }
     // whichever side changed settings last wins: the agent's tuning reaches this device,
@@ -205,7 +215,7 @@ export class Scanner {
         const adopted = { ...this.settings, ...serverSettings(r.settings), editedAt: at } as Settings;
         this.settings = adopted;
         this.serverKey = settingsKey(r.settings);
-        this.health = playbookHealth(this.journal, adopted);
+        this.health = playbookHealth(this.history, adopted);
         this.onServerSettings?.(adopted);
       } else await this.pushSettings();
     }
@@ -229,6 +239,7 @@ export class Scanner {
     try {
       await postState(this.settings.reviewPasscode, body);
       this.ver = -1;
+      this.av = -1;
       await this.poll();
     } catch (e: any) {
       this.server = { ...this.server, error: e?.message ?? String(e) };

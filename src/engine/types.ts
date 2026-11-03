@@ -23,7 +23,13 @@ export type StrategyId =
   | 'BREAK_RETEST'
   | 'VWAP_RECLAIM'
   | 'ORDER_BLOCK'
-  | 'BB_SQUEEZE';
+  | 'BB_SQUEEZE'
+  | 'DAY_SWEEP'
+  | 'FUNDING_FADE'
+  | 'RSI_DIVERGENCE'
+  | 'SESSION_ORB'
+  | 'DONCHIAN_BREAKOUT'
+  | 'EMA200_BOUNCE';
 
 export const STRATEGY_LABEL: Record<StrategyId, string> = {
   TREND_FVG_RETEST: 'Trend FVG Retest',
@@ -39,7 +45,13 @@ export const STRATEGY_LABEL: Record<StrategyId, string> = {
   BREAK_RETEST: 'Break & Retest',
   VWAP_RECLAIM: 'VWAP Reclaim / Reject',
   ORDER_BLOCK: 'Order Block Retest',
-  BB_SQUEEZE: 'Bollinger Squeeze Breakout'
+  BB_SQUEEZE: 'Bollinger Squeeze Breakout',
+  DAY_SWEEP: 'Previous Day High/Low Sweep',
+  FUNDING_FADE: 'Funding & Open Interest Fade',
+  RSI_DIVERGENCE: 'RSI Divergence at Range Edge',
+  SESSION_ORB: 'Session Opening Range Breakout',
+  DONCHIAN_BREAKOUT: 'Donchian Trend Breakout',
+  EMA200_BOUNCE: 'EMA 200 Trend Bounce'
 };
 export const ALL_STRATEGIES = Object.keys(STRATEGY_LABEL) as StrategyId[];
 
@@ -47,7 +59,36 @@ export const ALL_STRATEGIES = Object.keys(STRATEGY_LABEL) as StrategyId[];
  * Strategies on probation ("learning mode"): every setup is tracked silently and learned from, and a
  * strategy only sends you signals while its own results have proven it (see journal.ts playbookHealth).
  */
-export const PROBATION: ReadonlySet<StrategyId> = new Set<StrategyId>(['BREAK_RETEST', 'VWAP_RECLAIM', 'ORDER_BLOCK', 'BB_SQUEEZE']);
+export const PROBATION: ReadonlySet<StrategyId> = new Set<StrategyId>([
+  'BREAK_RETEST', 'VWAP_RECLAIM', 'ORDER_BLOCK', 'BB_SQUEEZE',
+  'DAY_SWEEP', 'FUNDING_FADE', 'RSI_DIVERGENCE', 'SESSION_ORB', 'DONCHIAN_BREAKOUT', 'EMA200_BOUNCE'
+]);
+
+/**
+ * Exit lab: every setup is followed with four exit plans at once, so each playbook can switch to the one
+ * that proves best on its own trades.
+ *  A = the playbook's own target (the original rule)   B = fixed 2R target
+ *  C = the next swing level on the chart (1.2R - 4R)    D = stop to break-even at +1R, then 2R
+ */
+export type ExitPlanId = 'A' | 'B' | 'C' | 'D';
+export const EXIT_PLANS: ExitPlanId[] = ['A', 'B', 'C', 'D'];
+export const EXIT_LABEL: Record<ExitPlanId, string> = { A: 'Playbook target', B: 'Fixed 2R', C: 'Next swing level', D: 'Break-even at +1R, then 2R' };
+export interface PlanLevels {
+  tp: number;
+  beAtR?: number; // move the stop to break-even (after costs) once price has gone this many R in favour
+}
+export interface PlanState {
+  outcome: Outcome;
+  rNet: number;
+  resolvedAt?: number;
+  be?: boolean; // the break-even stop is armed
+}
+
+/** live market context the server adds to each setup (0 / missing when unknown) */
+export interface MarketCtx {
+  funding?: number; // current funding rate (fraction per 8h, e.g. 0.0001 = 0.01%)
+  oiChg?: number; // open interest change over the last hour (fraction)
+}
 /** trades a learning strategy needs before it can go live */
 export const PROMOTE_MIN_TRADES = 40;
 
@@ -60,6 +101,11 @@ export interface Features {
   hour: number; // UTC hour 0-23
   trendAligned: number; // 1 if with HTF trend, 0 if range/counter
   btcAlign?: number; // +1 trade agrees with BTC's regime trend, -1 against it, 0 BTC ranging / unknown / BTC itself
+  funding?: number; // funding rate at the signal, in basis points per 8h
+  oiChg?: number; // open interest change over the last hour, in %
+  btcVol?: number; // BTC's ATR on the regime timeframe, in % of price
+  pdhDist?: number; // distance up to the previous UTC day's high, in ATR (negative = above it)
+  pdlDist?: number; // distance down to the previous UTC day's low, in ATR (negative = below it)
 }
 
 /** Rule thresholds the AI agent may tune (inside hard bounds). Defaults = the original fixed rules. */
@@ -218,7 +264,13 @@ export const DEFAULT_SETTINGS: Settings = {
     BREAK_RETEST: true,
     VWAP_RECLAIM: true,
     ORDER_BLOCK: true,
-    BB_SQUEEZE: true
+    BB_SQUEEZE: true,
+    DAY_SWEEP: true,
+    FUNDING_FADE: true,
+    RSI_DIVERGENCE: true,
+    SESSION_ORB: true,
+    DONCHIAN_BREAKOUT: true,
+    EMA200_BOUNCE: true
   },
   metaThreshold: 0.5,
   metaMinSamples: 40,
@@ -279,6 +331,9 @@ export interface Signal {
   pattern?: string; // the pattern this trade is built on (candlestick or chart pattern id, = Learn page id)
   patternTf?: string; // timeframe the pattern was read on
   drawing?: { lines: [number, number, number, number][]; labels: { t: number; p: number; text: string }[] };
+  plans?: Record<ExitPlanId, PlanLevels>; // the four exit plans the exit lab follows
+  exitPlan?: ExitPlanId; // which plan this trade actually uses (A unless another one proved better)
+  beAtR?: number; // break-even rule of the plan in use
 }
 
 export type EntryStatus = 'ACTIVE' | 'FILTERED' | 'PAUSED';
@@ -295,4 +350,8 @@ export interface JournalEntry {
   lastT?: number; // open time of the last candle already applied to this entry
   mfeR?: number; // furthest move in favour, in R (max favourable excursion)
   maeR?: number; // furthest move against, in R (max adverse excursion)
+  exits?: Partial<Record<ExitPlanId, PlanState>>; // exit lab: how each plan did on this setup
+  labBars?: number; // candles the exit lab has followed this setup
+  archived?: boolean; // rebuilt from the compact learning archive (no write-up or chart levels)
+  be?: boolean; // the trade's own break-even stop is armed
 }

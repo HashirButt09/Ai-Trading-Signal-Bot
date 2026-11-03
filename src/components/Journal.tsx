@@ -25,7 +25,7 @@ function verdictBadge(v: VerdictType): string {
 }
 
 export function Journal({ scanner }: { scanner: Scanner }) {
-  const all = scanner.journal;
+  const all = scanner.history; // archive of older closed trades + live journal
   const done = resolved(all);
   const live = done.filter((e) => !e.seed && e.status === 'ACTIVE');
   const shadow = done.filter((e) => !e.seed && e.status !== 'ACTIVE');
@@ -59,7 +59,7 @@ export function Journal({ scanner }: { scanner: Scanner }) {
     const head = 'time,symbol,side,playbook,status,outcome,entry,sl,tp,leverage,rr,rNet,pWin,seed\n';
     const rows = all
       .map((e) =>
-        [new Date(e.signal.time).toISOString(), e.signal.symbol, e.signal.side, e.signal.strategy, e.status, e.outcome, e.signal.entry, e.signal.sl, e.signal.tp, e.signal.leverage, e.signal.rr.toFixed(2), e.rNet.toFixed(3), e.signal.pWin?.toFixed(3) ?? '', e.seed ? 1 : 0].join(',')
+        [new Date(e.signal.time).toISOString(), e.signal.symbol, e.signal.side, e.signal.strategy, e.status, e.outcome, ...(e.archived ? ['', '', '', ''] : [e.signal.entry, e.signal.sl, e.signal.tp, e.signal.leverage]), e.signal.rr.toFixed(2), e.rNet.toFixed(3), e.signal.pWin?.toFixed(3) ?? '', e.seed ? 1 : 0].join(',')
       )
       .join('\n');
     const a = document.createElement('a');
@@ -253,14 +253,14 @@ export function Journal({ scanner }: { scanner: Scanner }) {
       </div>
 
       <div className="card">
-        <div className="label">Journal ({all.length})</div>
+        <div className="label">Journal ({scanner.journal.length} recent{all.length > scanner.journal.length ? ` · ${all.length - scanner.journal.length} older closed trades kept in the learning archive` : ''})</div>
         <div className="scroll">
           <div className="tablewrap"><table>
             <thead>
               <tr><th>Time</th><th>Pair</th><th>Side</th><th>Playbook</th><th>Entry</th><th>Lev</th><th>Result</th><th>R</th><th>Shown</th></tr>
             </thead>
             <tbody>
-              {[...all].reverse().slice(0, 200).map((e) => (
+              {[...scanner.journal].reverse().slice(0, 200).map((e) => (
                 <tr key={e.signal.id}>
                   <td>{localTime(e.signal.time)}</td>
                   <td>{e.signal.symbol}</td>
@@ -273,7 +273,7 @@ export function Journal({ scanner }: { scanner: Scanner }) {
                   <td className="muted small">{e.seed ? 'backtest' : e.status.toLowerCase()}</td>
                 </tr>
               ))}
-              {all.length === 0 && <tr><td colSpan={9} className="muted">No signals yet. The scanner only fires on closed candles when a playbook’s full conditions are met.</td></tr>}
+              {scanner.journal.length === 0 && <tr><td colSpan={9} className="muted">No signals yet. The scanner only fires on closed candles when a playbook’s full conditions are met.</td></tr>}
             </tbody>
           </table></div>
         </div>

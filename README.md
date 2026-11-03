@@ -138,6 +138,37 @@ decides separately. AI & journal -> Playbook health shows LEARNING n/40 or LIVE 
 regime timeframe, and the AI filter learns from that. The hard filter (block altcoin trades against BTC's
 trend) switches itself on only after 30+ such trades did clearly worse than the rest.
 
+## Results page and exit lab
+
+**Results** tab: every strategy in a row with trades, profit, loss, open, accuracy (share of closed trades in
+profit after fees), average and total R, its status (LIVE / LEARNING n/40 / PAUSED) and the exit it uses.
+Switch between 7 days / 30 days / everything kept, "All setups" or only "Signals you got", and list the
+trades of one strategy (All / Profit / Loss / Open).
+
+**Exit lab:** every setup is followed with four exits at once: A the playbook's own target, B a fixed 2R,
+C the next swing level on the chart, D break-even at +1R then 2R. A strategy switches to another exit by
+itself once that exit beat its own target on 40+ independent setups by more than noise.
+
+**More learning strategies** (all in learning mode): Previous Day High/Low Sweep, Funding & Open Interest
+Fade (live funding and open interest from Binance, so it learns only from live setups), RSI Divergence at
+Range Edge, Session Opening Range Breakout (London / New York), Donchian Trend Breakout and EMA 200 Trend
+Bounce. The AI filter also learns from funding, open-interest change, BTC volatility and the distance to
+yesterday's high and low.
+
+## How the server stores trades (free-tier friendly)
+
+- **journal:** only trades still being followed; read and written on every scan, so it stays small.
+- **digest:** the recent results of every playbook (what auto-pause, promotion, the exit lab and the BTC
+  filter need); small, read on every scan.
+- **shown / silent:** closed trades, appended (the Trades tab reads them). Silent ones are stored without
+  their write-up.
+- **archive:** every closed trade in a compact form, appended. Every 3 hours it is tidied (kept: every signal
+  you were shown for 60 days, the last 60 setups of every playbook, then the newest of the rest, about 850 KB),
+  and the AI filter retrains on it.
+
+This keeps Upstash use to a few GB of data a month on the free plan (10 GB). The app downloads the archive
+only when it changed.
+
 ## Optional: Gemini AI review (advisory only)
 
 Adds an **AI review (advisory)** button on each signal and a **Review my journal** button on the Journal tab. Gemini gets only the numbers the bot computed and replies with a TAKE / CAUTION / SKIP opinion and a "check on chart" item. It cannot change entry, stop, target or leverage.

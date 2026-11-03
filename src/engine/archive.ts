@@ -1,0 +1,235 @@
+/**
+ * Learning archive: closed trades in a compact form, so the bot can learn from weeks of results even
+ * though the live journal (with full write-ups) only keeps the last days. Every learning step reads
+ * archive + journal together.
+ *
+ * Kept when trimming (in this order): every signal you were shown or that the AI blocked (60 days),
+ * the last 60 setups of every playbook (so learning-mode playbooks never lose their record), then the
+ * newest of everything else until the size budget is used.
+ */
+import { ALL_STRATEGIES, EXIT_PLANS, type JournalEntry, type Outcome, type Regime, type Settings, type StrategyId } from './types.js';
+import { isTracking } from './journal.js';
+
+const REGIMES: Regime[] = ['TREND_BULL', 'TREND_BEAR', 'RANGE', 'CHOP'];
+const STATUS = ['ACTIVE', 'FILTERED', 'PAUSED'] as const;
+const OUTCOMES: Outcome[] = ['WIN', 'LOSS', 'EXPIRED', 'OPEN'];
+export const ARCHIVE_BYTES = 850_000; // one Redis value, well under Upstash's request size limit
+const DAY = 86_400_000;
+
+/** [t, resolvedAt-t, strategy, side, status, outcome, rNet, pWin, symbol, regime, slPct, rr, atrPct, adx, vol, hour, trend, btc, funding, oi, btcVol, pdh, pdl, patterns, exits, seed] */
+export type Rec = (number | string | null | number[])[];
+
+const r3 = (x: number | undefined | null) => (x === undefined || x === null || !Number.isFinite(x) ? null : Math.round(x * 1000) / 1000);
+
+export function encode(e: JournalEntry): Rec {
+  const s = e.signal;
+  const f = s.features ?? ({ atrPct: 0, adx: 0, volRatio: 1, rr: s.rr, slPct: s.slPct, hour: 0, trendAligned: 0 } as JournalEntry['signal']['features']);
+  return [
+    s.time,
+    (e.resolvedAt ?? s.time) - s.time,
+    ALL_STRATEGIES.indexOf(s.strategy),
+    s.side === 'LONG' ? 1 : -1,
+    STATUS.indexOf(e.status as (typeof STATUS)[number]),
+    OUTCOMES.indexOf(e.outcome),
+    r3(e.rNet),
+    r3(s.pWin),
+    s.symbol,
+    REGIMES.indexOf(s.regime),
+    r3(s.slPct * 100),
+    r3(s.rr),
+    r3(f.atrPct * 100),
+    r3(f.adx),
+    r3(f.volRatio),
+    f.hour,
+    f.trendAligned,
+    f.btcAlign ?? null,
+    r3(f.funding),
+    r3(f.oiChg),
+    r3(f.btcVol),
+    r3(f.pdhDist),
+    r3(f.pdlDist),
+    (s.patterns ?? []).join(','),
+    e.exits ? EXIT_PLANS.map((p) => r3(e.exits![p]?.rNet ?? 0) ?? 0) : null,
+    e.seed ? 1 : 0
+  ];
+}
+
+const num = (v: unknown) => (typeof v === 'number' ? v : undefined);
+
+export function decode(r: Rec, s: Pick<Settings, 'ltf' | 'htf'>): JournalEntry {
+  const t = r[0] as number;
+  const strategy = (ALL_STRATEGIES[r[2] as number] ?? 'TREND_FVG_RETEST') as StrategyId;
+  const symbol = String(r[8]);
+  const slPct = ((r[10] as number) ?? 0) / 100;
+  const rr = (r[11] as number) ?? 0;
+  const exitsR = Array.isArray(r[24]) ? (r[24] as number[]) : null;
+  const pats = String(r[23] ?? '');
+  return {
+    signal: {
+      id: `${symbol}-${s.ltf}-${t}-${strategy}`,
+      symbol,
+      side: r[3] === 1 ? 'LONG' : 'SHORT',
+      strategy,
+      regime: REGIMES[r[9] as number] ?? 'RANGE',
+      ltf: s.ltf,
+      htf: s.htf,
+      time: t,
+      entry: 1,
+      sl: 1 - slPct,
+      tp: 1 + slPct * rr,
+      rr,
+      slPct,
+      leverage: 0,
+      margin: 0,
+      notional: 0,
+      estLossUsd: 0,
+      scenario: '',
+      pWin: num(r[7]),
+      patterns: pats ? pats.split(',') : [],
+      features: {
+        atrPct: ((r[12] as number) ?? 0) / 100,
+        adx: (r[13] as number) ?? 0,
+        volRatio: (r[14] as number) ?? 1,
+        rr,
+        slPct,
+        hour: (r[15] as number) ?? 0,
+        trendAligned: (r[16] as number) ?? 0,
+        btcAlign: num(r[17]),
+        funding: num(r[18]),
+        oiChg: num(r[19]),
+        btcVol: num(r[20]),
+        pdhDist: num(r[21]),
+        pdlDist: num(r[22])
+      }
+    },
+    status: STATUS[r[4] as number] ?? 'PAUSED',
+    outcome: OUTCOMES[r[5] as number] ?? 'LOSS',
+    rNet: (r[6] as number) ?? 0,
+    resolvedAt: t + ((r[1] as number) ?? 0),
+    barsOpen: 0,
+    ...(exitsR ? { exits: Object.fromEntries(EXIT_PLANS.map((p, i) => [p, { outcome: (exitsR[i] > 0 ? 'WIN' : 'LOSS') as Outcome, rNet: exitsR[i] }])) } : {}),
+    ...(r[25] === 1 ? { seed: true } : {}),
+    archived: true
+  };
+}
+
+export const decodeAll = (recs: Rec[] | null | undefined, s: Pick<Settings, 'ltf' | 'htf'>): JournalEntry[] => (Array.isArray(recs) ? recs.map((r) => decode(r, s)) : []);
+
+/** archive + live journal as one time-ordered history (the live copy wins if both have a trade) */
+const memo = new WeakMap<JournalEntry[], { recs: unknown; key: string; out: JournalEntry[] }>();
+export function history(recs: Rec[] | null | undefined, journal: JournalEntry[], s: Pick<Settings, 'ltf' | 'htf'>): JournalEntry[] {
+  const key = `${s.ltf}|${s.htf}`;
+  const m = memo.get(journal);
+  if (m && m.recs === recs && m.key === key) return m.out; // same data, same answer
+  const live = new Set(journal.map((e) => e.signal.id));
+  const out = [...decodeAll(recs, s).filter((e) => !live.has(e.signal.id)), ...journal];
+  memo.set(journal, { recs, key, out });
+  return out;
+}
+
+/** keep the archive inside its size budget, keeping what learning and your stats need most */
+export function trimArchive(recs: Rec[], now: number, budget = ARCHIVE_BYTES): Rec[] {
+  const sorted = [...recs].sort((a, b) => (b[0] as number) + (b[1] as number) - ((a[0] as number) + (a[1] as number))); // newest first
+  const keep = new Set<number>();
+  const perStrat = new Map<number, number>();
+  sorted.forEach((r, i) => {
+    const shown = (r[4] === 0 || r[4] === 1) && (r[0] as number) >= now - 60 * DAY;
+    const k = r[2] as number;
+    const c = perStrat.get(k) ?? 0;
+    if (shown || c < 60) keep.add(i);
+    perStrat.set(k, c + 1);
+  });
+  let bytes = 2;
+  const size = (r: Rec) => JSON.stringify(r).length + 1;
+  keep.forEach((i) => (bytes += size(sorted[i])));
+  for (let i = 0; i < sorted.length && bytes < budget; i++) {
+    if (keep.has(i)) continue;
+    const b = size(sorted[i]);
+    if (bytes + b > budget) break;
+    keep.add(i);
+    bytes += b;
+  }
+  return sorted.filter((_, i) => keep.has(i)).reverse(); // oldest first
+}
+
+/** the live journal keeps only what is still being followed; everything finished leaves it */
+export function splitFinished(journal: JournalEntry[]): { tracking: JournalEntry[]; finished: JournalEntry[] } {
+  const tracking: JournalEntry[] = [];
+  const finished: JournalEntry[] = [];
+  for (const e of journal) (isTracking(e) ? tracking : finished).push(e);
+  return { tracking, finished };
+}
+
+/**
+ * Learning digest: the few numbers playbook health, the exit lab and the BTC filter need, for the most
+ * recent trades of every playbook. Small enough to read on every scan.
+ *   [t, resolvedAt - t, strategy, side, status, rNet, btcAlign, exits]
+ */
+export type Lite = (number | null | number[])[];
+export const DIGEST_PER_PLAYBOOK = 80;
+export const DIGEST_PER_BTC_GROUP = 200;
+
+export function encodeLite(e: JournalEntry): Lite {
+  return [
+    e.signal.time,
+    (e.resolvedAt ?? e.signal.time) - e.signal.time,
+    ALL_STRATEGIES.indexOf(e.signal.strategy),
+    e.signal.side === 'LONG' ? 1 : -1,
+    STATUS.indexOf(e.status as (typeof STATUS)[number]),
+    r3(e.rNet),
+    e.signal.features?.btcAlign ?? null,
+    e.exits ? EXIT_PLANS.map((p) => r3(e.exits![p]?.rNet ?? 0) ?? 0) : null
+  ];
+}
+export const liteOfRec = (r: Rec): Lite => [r[0] as number, r[1] as number, r[2] as number, r[3] as number, r[4] as number, r[6] as number, (r[17] as number | null) ?? null, (r[24] as number[] | null) ?? null];
+
+export function decodeLite(r: Lite, s: Pick<Settings, 'ltf' | 'htf'>): JournalEntry {
+  const t = r[0] as number;
+  const strategy = (ALL_STRATEGIES[r[2] as number] ?? 'TREND_FVG_RETEST') as StrategyId;
+  const ex = Array.isArray(r[7]) ? (r[7] as number[]) : null;
+  return {
+    signal: {
+      id: `lite-${t}-${r[2]}-${r[3]}-${r[5]}`,
+      symbol: '',
+      side: r[3] === 1 ? 'LONG' : 'SHORT',
+      strategy,
+      regime: 'RANGE',
+      ltf: s.ltf,
+      htf: s.htf,
+      time: t,
+      entry: 1, sl: 0.99, tp: 1.01, rr: 1, slPct: 0.01, leverage: 0, margin: 0, notional: 0, estLossUsd: 0, scenario: '',
+      features: { atrPct: 0, adx: 0, volRatio: 1, rr: 1, slPct: 0.01, hour: 0, trendAligned: 0, btcAlign: typeof r[6] === 'number' ? r[6] : undefined }
+    },
+    status: STATUS[r[4] as number] ?? 'PAUSED',
+    outcome: ((r[5] as number) ?? 0) > 0 ? 'WIN' : 'LOSS',
+    rNet: (r[5] as number) ?? 0,
+    resolvedAt: t + ((r[1] as number) ?? 0),
+    barsOpen: 0,
+    ...(ex ? { exits: Object.fromEntries(EXIT_PLANS.map((p, i) => [p, { outcome: (ex[i] > 0 ? 'WIN' : 'LOSS') as Outcome, rNet: ex[i] }])) } : {}),
+    archived: true
+  };
+}
+
+/** keep the newest trades of every playbook and of both BTC groups (oldest first) */
+export function buildDigest(list: Lite[]): Lite[] {
+  const end = (r: Lite) => (r[0] as number) + (r[1] as number);
+  const sorted = [...list].sort((a, b) => end(b) - end(a));
+  const per = new Map<number, number>();
+  let against = 0, other = 0;
+  const keep: Lite[] = [];
+  const seen = new Set<string>();
+  for (const r of sorted) {
+    const key = `${r[0]}|${r[2]}|${r[3]}|${r[5]}|${r[1]}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const k = r[2] as number;
+    const c = per.get(k) ?? 0;
+    const btc = r[6] === -1 ? 'a' : typeof r[6] === 'number' ? 'o' : '';
+    const need = c < DIGEST_PER_PLAYBOOK || (btc === 'a' && against < DIGEST_PER_BTC_GROUP) || (btc === 'o' && other < DIGEST_PER_BTC_GROUP);
+    per.set(k, c + 1);
+    if (btc === 'a') against++;
+    if (btc === 'o') other++;
+    if (need) keep.push(r);
+  }
+  return keep.reverse();
+}

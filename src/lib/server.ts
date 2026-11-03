@@ -1,5 +1,6 @@
 import type { JournalEntry, Settings } from '../engine/types';
 import type { MetaModel } from '../engine/meta';
+import type { Rec } from '../engine/archive';
 
 export interface ServerStatus {
   ver: number;
@@ -25,6 +26,8 @@ export interface StateResponse {
   settings?: Settings;
   journal?: JournalEntry[];
   model?: MetaModel | null;
+  archive?: Rec[]; // compact closed trades (weeks of history); only sent when it changed
+  av?: number; // archive version
 }
 
 export class ServerError extends Error {
@@ -51,9 +54,10 @@ async function call<T>(path: string, passcode: string, init?: { method?: string;
   return j as T;
 }
 
-export const getState = (passcode: string, ver?: number, profile?: string) => {
+export const getState = (passcode: string, ver?: number, profile?: string, av?: number) => {
   const q = new URLSearchParams();
   if (ver !== undefined && ver >= 0) q.set('ver', String(ver));
+  if (av !== undefined && av >= 0) q.set('av', String(av));
   if (profile && profile !== 'main') q.set('profile', profile);
   const qs = q.toString();
   return call<StateResponse>(`/api/state${qs ? `?${qs}` : ''}`, passcode);

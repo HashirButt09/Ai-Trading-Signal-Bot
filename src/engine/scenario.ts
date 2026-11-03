@@ -67,6 +67,45 @@ export function buildScenario(s: ScenarioInput): string {
         tail + learning
       );
     }
+    case 'DAY_SWEEP':
+      return (
+        `The ${s.htf} regime is ${s.regime === 'RANGE' ? 'sideways' : dir} (ADX ${s.adx.toFixed(0)}). Price pushed ${long ? 'below yesterday\'s low' : 'above yesterday\'s high'} (${lv})${s.swept !== undefined ? `, reaching ${fmt(s.swept)}` : ''}, ` +
+        `where many traders keep their stops, and then closed back ${long ? 'above' : 'below'} it on ${vol}. That is a stop hunt that failed to continue, so price tends to rotate back into yesterday's range.` +
+        tail + learning
+      );
+    case 'FUNDING_FADE':
+      return (
+        `Futures traders are crowded ${long ? 'short' : 'long'}: the funding rate is extreme and open interest kept rising, so many positions are paying to hold the same bet. ` +
+        `On the ${s.ltf} chart price has now turned against them, closing ${long ? 'above' : 'below'} the 20 EMA and the previous candle's ${long ? 'high' : 'low'} on ${vol}. ` +
+        `If they start closing, their orders push price ${long ? 'up' : 'down'}.` +
+        tail + learning
+      );
+    case 'RSI_DIVERGENCE':
+      return (
+        `Price is at the ${long ? 'bottom' : 'top'} of its recent range and just made a ${long ? 'lower low' : 'higher high'} than the swing at ${lv}, but RSI did not follow: ` +
+        `it made a ${long ? 'higher low' : 'lower high'}. Momentum is fading at the edge, and the trigger candle has turned ${long ? 'up' : 'down'} on ${vol}.` +
+        tail + learning
+      );
+    case 'SESSION_ORB': {
+      const rg = s.rangeHigh !== undefined && s.rangeLow !== undefined ? ` (${fmt(s.rangeLow)} - ${fmt(s.rangeHigh)})` : '';
+      return (
+        `A major session has opened. Its first hour set an opening range${rg}, and this is the first ${s.ltf} close ${long ? 'above' : 'below'} it, on ${vol}. ` +
+        `Opening-range breakouts with volume often run as the new session's traders join in. The ${s.htf} regime is ${s.regime === 'RANGE' ? 'sideways' : dir}.` +
+        tail + learning
+      );
+    }
+    case 'DONCHIAN_BREAKOUT':
+      return (
+        `The ${s.htf} regime is ${dir} (ADX ${s.adx.toFixed(0)}). On the ${s.ltf} chart price closed ${long ? 'above the highest high' : 'below the lowest low'} of the last 55 candles (${lv}) on ${vol}: ` +
+        `the classic trend-following breakout. The stop is 2 ATR away to give the trend room.` +
+        tail + learning
+      );
+    case 'EMA200_BOUNCE':
+      return (
+        `The ${s.htf} regime is ${dir} (ADX ${s.adx.toFixed(0)}) and on the ${s.ltf} chart price has stayed ${long ? 'above' : 'below'} the 200 EMA, with the 50 EMA on the same side. ` +
+        `This is the first pullback to the 200 EMA (${lv}) in a while, and the candle rejected it with a ${long ? 'bullish' : 'bearish'} close on ${vol}.` +
+        tail + learning
+      );
     case 'BB_SQUEEZE':
       return (
         `The ${s.htf} regime is ${s.regime === 'RANGE' ? 'sideways' : dir} (ADX ${s.adx.toFixed(0)}). On the ${s.ltf} chart the Bollinger Bands had squeezed to their narrowest in 100 candles, ` +

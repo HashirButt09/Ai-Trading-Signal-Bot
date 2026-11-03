@@ -20,7 +20,7 @@ export function factors(e: JournalEntry): Factor[] {
   const s = e.signal;
   const f = s.features;
   const long = s.side === 'LONG';
-  const trend = s.strategy === 'TREND_FVG_RETEST' || s.strategy === 'TREND_EMA_PULLBACK' || s.strategy === 'CHART_FLAG' || s.strategy === 'ORDER_BLOCK' || s.strategy === 'BREAK_RETEST';
+  const trend = s.strategy === 'TREND_FVG_RETEST' || s.strategy === 'TREND_EMA_PULLBACK' || s.strategy === 'CHART_FLAG' || s.strategy === 'ORDER_BLOCK' || s.strategy === 'BREAK_RETEST' || s.strategy === 'DONCHIAN_BREAKOUT' || s.strategy === 'EMA200_BOUNCE';
   const range = s.strategy === 'RANGE_SWEEP_RECLAIM';
   const out: Factor[] = [];
   if (trend) {

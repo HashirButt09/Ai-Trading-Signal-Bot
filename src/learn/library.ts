@@ -463,6 +463,60 @@ export const LIBRARY: Entry[] = [
     related: ['bollinger', 'atr', 'volume']
   },
   {
+    id: 'DAY_SWEEP', cat: 'bot', title: 'Playbook: Previous Day High/Low Sweep (learning mode)',
+    summary: 'Price takes yesterday\u2019s high (or low), where many stops sit, then closes back inside.',
+    identify: 'Yesterday\u2019s UTC high and low, at least 2 ATR apart. One of the last 3 candles goes beyond the level, the trigger candle closes back inside it in the opposite direction, and the level was not already lost earlier in the day.',
+    meaning: 'Yesterday\u2019s extremes collect stop orders. When they are taken and price cannot continue, the stop hunt is over and price often rotates back into the range.',
+    trade: 'Entry at the close back inside, stop just beyond the sweep extreme, target your trend R multiple. Not taken against the higher-timeframe trend.',
+    pitfalls: 'In a strong trend the break of yesterday\u2019s level is often real. New: tracked silently until it proves itself.',
+    related: ['liquidity_sweep', 'support_resistance', 'RANGE_SWEEP_RECLAIM']
+  },
+  {
+    id: 'FUNDING_FADE', cat: 'bot', title: 'Playbook: Funding & Open Interest Fade (learning mode)',
+    summary: 'One side of the futures market is crowded and paying for it; when price turns against them, fade the crowd.',
+    identify: 'Funding rate of at least +0.05% per 8 hours (crowded longs) or -0.03% or lower (crowded shorts), with open interest up at least 1% in the last hour. The trigger candle closes beyond the 20 EMA and the previous candle\u2019s extreme against the crowd.',
+    meaning: 'Extreme funding means many traders hold the same leveraged bet. If price moves against them, their forced exits push it further.',
+    trade: 'Entry at the close, stop beyond the extreme of the last 6 candles, target your trend R multiple. Uses live data, so it cannot be backtested and only learns from live setups.',
+    pitfalls: 'Crowded trades can stay crowded for days in a strong trend. New: tracked silently until it proves itself.',
+    related: ['leverage_liq', 'liquidity_sweep', 'ema']
+  },
+  {
+    id: 'RSI_DIVERGENCE', cat: 'bot', title: 'Playbook: RSI Divergence at Range Edge (learning mode)',
+    summary: 'At the top (bottom) of the range, price makes a new high (low) that RSI does not confirm, then turns.',
+    identify: 'Price in the top 15% (bottom 15%) of its 100-candle range. The latest candles exceed a confirmed swing 6-40 candles back, while RSI 14 is at least 3 points lower (higher) than at that swing. The trigger candle closes against the move.',
+    meaning: 'Momentum is fading at an extreme: buyers (sellers) are pushing price further with less force each time.',
+    trade: 'Entry at the turn candle\u2019s close, stop beyond the new extreme, target your trend R multiple. Not taken against the higher-timeframe trend.',
+    pitfalls: 'Divergence can repeat several times in a strong trend before price turns. New: tracked silently until it proves itself.',
+    related: ['divergence', 'rsi', 'range']
+  },
+  {
+    id: 'SESSION_ORB', cat: 'bot', title: 'Playbook: Session Opening Range Breakout (learning mode)',
+    summary: 'The first hour after the London (07:00 UTC) or New York (13:30 UTC) open sets a range; trade the first close outside it with volume.',
+    identify: 'Execution candles of 15 minutes or less. The high and low of the first hour after the open (no wider than 4 ATR). Within the next 3 hours, the first candle that closes beyond it by 0.1 ATR on at least 1.5x average volume.',
+    meaning: 'A new session brings new traders and volume; the first range shows where they stand, and a break with volume is often where the day\u2019s move starts.',
+    trade: 'Entry at the breakout close, stop at the middle of the opening range, target your trend R multiple. Not taken against the higher-timeframe trend.',
+    pitfalls: 'Quiet sessions produce fake breakouts that fall back into the range. New: tracked silently until it proves itself.',
+    related: ['sessions', 'break_retest', 'volume']
+  },
+  {
+    id: 'DONCHIAN_BREAKOUT', cat: 'bot', title: 'Playbook: Donchian Trend Breakout (learning mode)',
+    summary: 'In a trend, a close beyond the highest high (lowest low) of the last 55 candles with volume.',
+    identify: 'Higher timeframe trending. The trigger candle closes beyond the 55-candle extreme, the previous candle did not, and volume is at least 1.2x average.',
+    meaning: 'The classic trend-following entry: a new extreme in the trend direction shows the trend is pushing on.',
+    trade: 'Entry at the close, stop 2 ATR away to give the trend room, target your trend R multiple (the exit lab also tests further targets).',
+    pitfalls: 'Many breakouts fail in ranges; that is why it only runs in a trend regime. Works best on slower charts. New: tracked silently until it proves itself.',
+    related: ['trend_structure', 'atr', 'adx']
+  },
+  {
+    id: 'EMA200_BOUNCE', cat: 'bot', title: 'Playbook: EMA 200 Trend Bounce (learning mode)',
+    summary: 'In a trend that has held the 200 EMA, the first pullback that touches it and rejects.',
+    identify: 'Higher timeframe trending. On the execution chart at least 40 of the last 50 closes are on the trend side of the 200 EMA and the 50 EMA is on the same side; no touch of the 200 EMA in the last 20 candles; the trigger candle touches it (within 0.2 ATR) and closes away from it in the trend direction.',
+    meaning: 'The 200 EMA is the line many traders watch for the long-term trend; the first test after a long run often holds.',
+    trade: 'Entry at the rejection close, stop beyond the candle or the EMA plus 0.3 ATR, target your trend R multiple.',
+    pitfalls: 'A close through the 200 EMA is a warning that the trend may be ending. New: tracked silently until it proves itself.',
+    related: ['ema', 'trend_structure', 'TREND_EMA_PULLBACK']
+  },
+  {
     id: 'meta_filter', cat: 'bot', title: 'The learned AI filter',
     summary: 'A small model trained on your last 30 days of resolved trades that estimates each new setup’s chance of winning.',
     identify: 'It uses volatility, ADX, volume, reward-to-risk, stop size, hour, playbook and direction. Setups below the threshold are hidden from you but still tracked so it keeps learning.',

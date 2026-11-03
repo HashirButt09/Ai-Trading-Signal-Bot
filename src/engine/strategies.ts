@@ -1,4 +1,4 @@
-import { DEFAULT_TUNE, type Candle, type Features, type Regime, type Settings, type Side, type Signal, type StrategyId, type Tune } from './types.js';
+import { DEFAULT_TUNE, EXIT_PLANS, type Candle, type ExitPlanId, type Features, type MarketCtx, type PlanLevels, type Regime, type Settings, type Side, type Signal, type StrategyId, type Tune } from './types.js';
 import { atr, ema, sma } from './indicators.js';
 import { type HtfCtx, htfIndexAt, regimeAt } from './regime.js';
 import { planRisk } from './risk.js';
@@ -6,7 +6,7 @@ import { buildCandleScenario, buildChartScenario, buildScenario } from './scenar
 import { CHART_FAMILY, CHART_NAME, detectChartPattern } from './chartpatterns.js';
 import { detectCandles, PATTERN_INFO } from './patterns.js';
 import { TF_MS } from './time.js';
-import { vwap } from './ta.js';
+import { rsi, vwap } from './ta.js';
 
 export interface LtfCtx {
   candles: Candle[];
@@ -17,6 +17,34 @@ export interface LtfCtx {
   vwap: number[]; // daily (UTC) VWAP
   bbMid: number[]; // 20-period SMA of closes
   bbDev: number[]; // 20-period population standard deviation of closes
+  rsi: number[]; // RSI 14 of closes
+  ema200: number[];
+  pdh: number[]; // previous UTC day's high (NaN when that day is not fully in the data)
+  pdl: number[]; // previous UTC day's low
+}
+
+const DAY = 86_400_000;
+/** previous complete UTC day's high and low for every candle */
+function prevDay(c: Candle[]): { pdh: number[]; pdl: number[] } {
+  const day = new Map<number, { h: number; l: number; first: number }>();
+  for (const k of c) {
+    const d = Math.floor(k.t / DAY);
+    const x = day.get(d);
+    if (x) {
+      x.h = Math.max(x.h, k.h);
+      x.l = Math.min(x.l, k.l);
+    } else day.set(d, { h: k.h, l: k.l, first: k.t });
+  }
+  const step = c.length > 1 ? c[1].t - c[0].t : DAY;
+  const pdh = c.map(() => NaN), pdl = c.map(() => NaN);
+  for (let i = 0; i < c.length; i++) {
+    const y = day.get(Math.floor(c[i].t / DAY) - 1);
+    if (y && y.first <= (Math.floor(c[i].t / DAY) - 1) * DAY + step) {
+      pdh[i] = y.h;
+      pdl[i] = y.l;
+    }
+  }
+  return { pdh, pdl };
 }
 
 export function buildLtf(candles: Candle[]): LtfCtx {
@@ -36,7 +64,10 @@ export function buildLtf(candles: Candle[]): LtfCtx {
     volMa: sma(candles.map((c) => c.v), 20),
     vwap: vwap(candles).vwap,
     bbMid,
-    bbDev
+    bbDev,
+    rsi: rsi(closes, 14),
+    ema200: ema(closes, 200),
+    ...prevDay(candles)
   };
 }
 
@@ -422,6 +453,203 @@ function bbSqueeze(L: LtfCtx, i: number, regime: Regime, tpR: number): Raw | nul
   return null;
 }
 
+
+// ---------------- learning batch 2 ----------------
+
+/** Previous Day High/Low Sweep: price takes yesterday's high (low), then closes back below (above) it */
+function daySweep(L: LtfCtx, i: number, regime: Regime, tpR: number): Raw | null {
+  const c = L.candles;
+  const a = L.atr[i];
+  const H = L.pdh[i], Lo = L.pdl[i];
+  if (!Number.isFinite(a) || !Number.isFinite(H) || !Number.isFinite(Lo) || H - Lo < 2 * a) return null;
+  const x = c[i];
+  for (const short of [true, false]) {
+    if (short && regime === 'TREND_BULL') continue;
+    if (!short && regime === 'TREND_BEAR') continue;
+    let ext = short ? -Infinity : Infinity;
+    for (let k = i - 2; k <= i; k++) ext = short ? Math.max(ext, c[k].h) : Math.min(ext, c[k].l);
+    const swept = short ? ext > H : ext < Lo;
+    const back = short ? x.c < H && bodyDir(x) < 0 : x.c > Lo && bodyDir(x) > 0;
+    // the level was not already lost earlier today (a sweep, not a trend through it)
+    let clean = true;
+    for (let k = i - 12; k < i - 2; k++) if (short ? c[k].c > H : c[k].c < Lo) clean = false;
+    if (!swept || !back || !clean) continue;
+    const sl = short ? ext + 0.1 * a : ext - 0.1 * a;
+    const risk = Math.abs(x.c - sl);
+    if (risk <= 0 || risk > 3 * a) continue;
+    const tp = short ? x.c - tpR * risk : x.c + tpR * risk;
+    return { strategy: 'DAY_SWEEP', side: short ? 'SHORT' : 'LONG', entry: x.c, sl, tp, trendAligned: 0, level: short ? H : Lo, swept: ext };
+  }
+  return null;
+}
+
+/**
+ * Funding & Open Interest Fade: one side is crowded (extreme funding while open interest keeps rising)
+ * and price starts to turn against it. Needs live funding / open interest, so it never fires in backtests.
+ */
+function fundingFade(L: LtfCtx, i: number, m: MarketCtx | undefined, tpR: number): Raw | null {
+  if (!m || m.funding === undefined || m.oiChg === undefined) return null;
+  const c = L.candles;
+  const a = L.atr[i];
+  if (!Number.isFinite(a)) return null;
+  const x = c[i], p = c[i - 1];
+  const crowdedLong = m.funding >= 0.0005 && m.oiChg >= 0.01;
+  const crowdedShort = m.funding <= -0.0003 && m.oiChg >= 0.01;
+  if (!crowdedLong && !crowdedShort) return null;
+  const short = crowdedLong;
+  const turn = short ? bodyDir(x) < 0 && x.c < L.ema20[i] && x.c < p.l : bodyDir(x) > 0 && x.c > L.ema20[i] && x.c > p.h;
+  if (!turn) return null;
+  let ext = short ? -Infinity : Infinity;
+  for (let k = i - 5; k <= i; k++) ext = short ? Math.max(ext, c[k].h) : Math.min(ext, c[k].l);
+  const sl = short ? ext + 0.2 * a : ext - 0.2 * a;
+  const risk = Math.abs(x.c - sl);
+  if (risk <= 0 || risk > 3 * a) return null;
+  const tp = short ? x.c - tpR * risk : x.c + tpR * risk;
+  return { strategy: 'FUNDING_FADE', side: short ? 'SHORT' : 'LONG', entry: x.c, sl, tp, trendAligned: 0, level: L.ema20[i] };
+}
+
+/** RSI Divergence at a range edge: a new high (low) that RSI does not confirm, then a turn candle */
+function rsiDivergence(L: LtfCtx, i: number, regime: Regime, tpR: number): Raw | null {
+  const c = L.candles;
+  const a = L.atr[i];
+  if (!Number.isFinite(a) || i < 110) return null;
+  let hi = -Infinity, lo = Infinity;
+  for (let k = i - 100; k < i; k++) {
+    hi = Math.max(hi, c[k].h);
+    lo = Math.min(lo, c[k].l);
+  }
+  const pos = (c[i].c - lo) / (hi - lo || 1);
+  const x = c[i];
+  for (const short of [true, false]) {
+    if (short && (regime === 'TREND_BULL' || pos < 0.85)) continue;
+    if (!short && (regime === 'TREND_BEAR' || pos > 0.15)) continue;
+    // the new extreme is on candle i-1 or i, the earlier swing is a confirmed pivot 6-40 candles back
+    const nowK = short ? (c[i].h >= c[i - 1].h ? i : i - 1) : c[i].l <= c[i - 1].l ? i : i - 1;
+    let piv = -1;
+    for (let j = i - 6; j >= i - 40 && piv < 0; j--) {
+      let isPiv = true;
+      for (let k = j - 3; k <= j + 3; k++) if (k !== j && (short ? c[k].h >= c[j].h : c[k].l <= c[j].l)) isPiv = false;
+      if (isPiv) piv = j;
+    }
+    if (piv < 0) continue;
+    const newExt = short ? c[nowK].h > c[piv].h : c[nowK].l < c[piv].l;
+    const div = short ? L.rsi[nowK] < L.rsi[piv] - 3 : L.rsi[nowK] > L.rsi[piv] + 3;
+    const turn = short ? bodyDir(x) < 0 && x.c < c[i - 1].c : bodyDir(x) > 0 && x.c > c[i - 1].c;
+    if (!newExt || !div || !turn) continue;
+    const sl = short ? c[nowK].h + 0.2 * a : c[nowK].l - 0.2 * a;
+    const risk = Math.abs(x.c - sl);
+    if (risk <= 0 || risk > 3 * a) continue;
+    const tp = short ? x.c - tpR * risk : x.c + tpR * risk;
+    return { strategy: 'RSI_DIVERGENCE', side: short ? 'SHORT' : 'LONG', entry: x.c, sl, tp, trendAligned: 0, level: short ? c[piv].h : c[piv].l };
+  }
+  return null;
+}
+
+/** Session Opening Range Breakout: the first hour after the London (07:00 UTC) or New York (13:30 UTC) open */
+function sessionOrb(L: LtfCtx, i: number, regime: Regime, tpR: number, step: number): Raw | null {
+  if (step > 15 * 60_000) return null; // needs candles of 15 minutes or less
+  const c = L.candles;
+  const a = L.atr[i];
+  if (!Number.isFinite(a)) return null;
+  const x = c[i];
+  const dayStart = Math.floor(x.t / DAY) * DAY;
+  for (const openMin of [7 * 60, 13 * 60 + 30]) {
+    const o = dayStart + openMin * 60_000;
+    const rEnd = o + 60 * 60_000; // the opening range: the first hour
+    if (x.t < rEnd || x.t >= o + 4 * 60 * 60_000) continue; // breakouts only in the 3 hours after it
+    let hi = -Infinity, lo = Infinity, n = 0;
+    for (let k = i; k >= 0 && c[k].t >= o; k--) if (c[k].t < rEnd) { hi = Math.max(hi, c[k].h); lo = Math.min(lo, c[k].l); n++; }
+    if (n < Math.max(2, Math.floor((60 * 60_000) / step) - 1) || hi - lo <= 0 || hi - lo > 4 * a) continue;
+    // first close outside the range since it formed
+    let first = true;
+    for (let k = i - 1; k >= 0 && c[k].t >= rEnd; k--) if (c[k].c > hi || c[k].c < lo) first = false;
+    if (!first || !(L.volMa[i] > 0 && x.v >= 1.5 * L.volMa[i])) continue;
+    for (const long of [true, false]) {
+      if (long && regime === 'TREND_BEAR') continue;
+      if (!long && regime === 'TREND_BULL') continue;
+      if (long ? !(x.c > hi + 0.1 * a && bodyDir(x) > 0) : !(x.c < lo - 0.1 * a && bodyDir(x) < 0)) continue;
+      const mid = (hi + lo) / 2;
+      const sl = long ? mid - 0.1 * a : mid + 0.1 * a;
+      const risk = Math.abs(x.c - sl);
+      if (risk <= 0 || risk > 3 * a) continue;
+      const tp = long ? x.c + tpR * risk : x.c - tpR * risk;
+      const trendAligned = (long && regime === 'TREND_BULL') || (!long && regime === 'TREND_BEAR') ? 1 : 0;
+      return { strategy: 'SESSION_ORB', side: long ? 'LONG' : 'SHORT', entry: x.c, sl, tp, trendAligned, level: long ? hi : lo, rangeHigh: hi, rangeLow: lo };
+    }
+  }
+  return null;
+}
+
+/** Donchian Trend Breakout: a close beyond the 55-candle high (low) in a trend, with volume; 2 ATR stop */
+function donchianBreakout(side: Side, L: LtfCtx, i: number, tpR: number): Raw | null {
+  const c = L.candles;
+  const a = L.atr[i];
+  if (!Number.isFinite(a) || i < 60) return null;
+  const long = side === 'LONG';
+  let ext = long ? -Infinity : Infinity;
+  for (let k = i - 55; k < i; k++) ext = long ? Math.max(ext, c[k].h) : Math.min(ext, c[k].l);
+  const x = c[i];
+  const brk = long ? x.c > ext && c[i - 1].c <= ext && bodyDir(x) > 0 : x.c < ext && c[i - 1].c >= ext && bodyDir(x) < 0;
+  if (!brk || !(L.volMa[i] > 0 && x.v >= 1.2 * L.volMa[i])) return null;
+  const sl = long ? x.c - 2 * a : x.c + 2 * a;
+  const risk = 2 * a;
+  const tp = long ? x.c + tpR * risk : x.c - tpR * risk;
+  return { strategy: 'DONCHIAN_BREAKOUT', side, entry: x.c, sl, tp, trendAligned: 1, level: ext };
+}
+
+/** EMA 200 Trend Bounce: in a trend that has held the 200 EMA, the first pullback that touches it and rejects */
+function ema200Bounce(side: Side, L: LtfCtx, i: number, tpR: number): Raw | null {
+  const c = L.candles;
+  const a = L.atr[i];
+  const e = L.ema200[i];
+  if (!Number.isFinite(a) || !Number.isFinite(e) || i < 260) return null;
+  const long = side === 'LONG';
+  let held = 0;
+  for (let k = i - 50; k < i; k++) if (long ? c[k].c > L.ema200[k] : c[k].c < L.ema200[k]) held++;
+  if (held < 40 || (long ? L.ema50[i] <= e : L.ema50[i] >= e)) return null;
+  // first touch in the last 20 candles
+  for (let k = i - 20; k < i; k++) if (long ? c[k].l <= L.ema200[k] + 0.2 * L.atr[k] : c[k].h >= L.ema200[k] - 0.2 * L.atr[k]) return null;
+  const x = c[i];
+  const touch = long ? x.l <= e + 0.2 * a : x.h >= e - 0.2 * a;
+  const reject = long ? x.c > e && bodyDir(x) > 0 : x.c < e && bodyDir(x) < 0;
+  if (!touch || !reject) return null;
+  const sl = long ? Math.min(x.l, e) - 0.3 * a : Math.max(x.h, e) + 0.3 * a;
+  const risk = Math.abs(x.c - sl);
+  if (risk <= 0 || risk > 3 * a) return null;
+  const tp = long ? x.c + tpR * risk : x.c - tpR * risk;
+  return { strategy: 'EMA200_BOUNCE', side, entry: x.c, sl, tp, trendAligned: 1, level: e };
+}
+
+/**
+ * Exit lab targets: A the playbook's own, B 2R, C the nearest confirmed swing level beyond entry
+ * (1.2R - 4R, else A), D break-even at +1R then 2R. Uses only candles up to i.
+ */
+export function exitPlans(L: LtfCtx, i: number, side: Side, entry: number, sl: number, tpA: number): Record<ExitPlanId, PlanLevels> {
+  const c = L.candles;
+  const long = side === 'LONG';
+  const risk = Math.abs(entry - sl);
+  const at = (r: number) => (long ? entry + r * risk : entry - r * risk);
+  let tpC = NaN;
+  for (let j = i - 3; j >= Math.max(3, i - 150); j--) {
+    let piv = true;
+    for (let k = j - 3; k <= j + 3; k++) if (k !== j && (long ? c[k].h >= c[j].h : c[k].l <= c[j].l)) piv = false;
+    if (!piv) continue;
+    const lvl = long ? c[j].h : c[j].l;
+    const r = (long ? lvl - entry : entry - lvl) / risk;
+    if (r >= 1.2 && r <= 4 && (!Number.isFinite(tpC) || (long ? lvl < tpC : lvl > tpC))) tpC = lvl;
+  }
+  return { A: { tp: tpA }, B: { tp: at(2) }, C: { tp: Number.isFinite(tpC) ? tpC : tpA }, D: { tp: at(2), beAtR: 1 } };
+}
+void EXIT_PLANS;
+
+/** BTC's ATR on the regime timeframe as % of price, at a moment */
+export function btcVolAt(btc: HtfCtx | null | undefined, closeTime: number, htf: string): number | undefined {
+  if (!btc) return undefined;
+  const bi = htfIndexAt(btc, closeTime, TF_MS[htf]);
+  if (bi < 0 || !Number.isFinite(btc.atr[bi])) return undefined;
+  return +((btc.atr[bi] / btc.candles[bi].c) * 100).toFixed(3);
+}
+
 /** +1 the trade goes with BTC's higher-timeframe trend, -1 against it, 0 BTC ranging / unknown / BTC itself */
 export function btcAlignAt(btc: HtfCtx | null | undefined, symbol: string, side: Side, closeTime: number, htf: string, adxLevel: number): number {
   if (!btc || symbol.startsWith('BTC')) return 0;
@@ -448,7 +676,8 @@ export function evaluate(
   i: number,
   H: HtfCtx,
   settings: Settings,
-  btc?: HtfCtx | null // BTC on the regime timeframe, to learn whether trading against BTC's trend hurts
+  btc?: HtfCtx | null, // BTC on the regime timeframe, to learn whether trading against BTC's trend hurts
+  market?: MarketCtx // live funding / open interest (server only)
 ): EvalResult {
   const c = L.candles;
   if (i < WARMUP || i >= c.length) return { regime: null, adx: NaN, signal: null, note: 'warming up' };
@@ -494,6 +723,13 @@ export function evaluate(
     if (!raw && en.ORDER_BLOCK && (regime === 'TREND_BULL' || regime === 'TREND_BEAR')) raw = orderBlock(regime === 'TREND_BULL' ? 'LONG' : 'SHORT', L, i, settings.tpR);
     if (!raw && en.VWAP_RECLAIM) raw = vwapReclaim(L, i, regime, settings.tpR, step);
     if (!raw && en.BB_SQUEEZE) raw = bbSqueeze(L, i, regime, settings.tpR);
+    const trend = regime === 'TREND_BULL' ? 'LONG' : regime === 'TREND_BEAR' ? 'SHORT' : null;
+    if (!raw && en.DAY_SWEEP) raw = daySweep(L, i, regime, settings.tpR);
+    if (!raw && en.FUNDING_FADE) raw = fundingFade(L, i, market, settings.tpR);
+    if (!raw && en.RSI_DIVERGENCE) raw = rsiDivergence(L, i, regime, settings.tpR);
+    if (!raw && en.SESSION_ORB) raw = sessionOrb(L, i, regime, settings.tpR, step);
+    if (!raw && trend && en.DONCHIAN_BREAKOUT) raw = donchianBreakout(trend, L, i, settings.tpR);
+    if (!raw && trend && en.EMA200_BOUNCE) raw = ema200Bounce(trend, L, i, settings.tpR);
   }
 
   if (!raw) return { regime, adx: ri.adx, signal: null };
@@ -512,7 +748,12 @@ export function evaluate(
     slPct: plan.slPct,
     hour: new Date(x.t + TF_MS[settings.ltf]).getUTCHours(),
     trendAligned: raw.trendAligned,
-    btcAlign: btcAlignAt(btc, symbol, raw.side, closeTime, settings.htf, tn.regimeAdx)
+    btcAlign: btcAlignAt(btc, symbol, raw.side, closeTime, settings.htf, tn.regimeAdx),
+    funding: market?.funding !== undefined ? +(market.funding * 1e4).toFixed(2) : undefined,
+    oiChg: market?.oiChg !== undefined ? +(market.oiChg * 100).toFixed(2) : undefined,
+    btcVol: btcVolAt(btc, closeTime, settings.htf),
+    pdhDist: Number.isFinite(L.pdh[i]) ? +((L.pdh[i] - x.c) / L.atr[i]).toFixed(2) : undefined,
+    pdlDist: Number.isFinite(L.pdl[i]) ? +((x.c - L.pdl[i]) / L.atr[i]).toFixed(2) : undefined
   };
 
   const base = {
@@ -574,7 +815,9 @@ export function evaluate(
     zone: raw.zone,
     patterns,
     ...(raw.pattern ? { pattern: raw.pattern, patternTf: raw.patternTf ?? settings.ltf } : {}),
-    ...(raw.drawing ? { drawing: raw.drawing } : {})
+    ...(raw.drawing ? { drawing: raw.drawing } : {}),
+    plans: exitPlans(L, i, raw.side, raw.entry, raw.sl, raw.tp),
+    exitPlan: 'A'
   };
   return { regime, adx: ri.adx, signal };
 }

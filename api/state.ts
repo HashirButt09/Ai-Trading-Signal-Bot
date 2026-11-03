@@ -10,9 +10,10 @@ import type { JournalEntry, Settings } from '../src/engine/types.js';
 import { retrain } from '../src/engine/journal.js';
 import { checkApp, json } from '../server/http.js';
 import { kvConfig, restKv, type Kv } from '../server/kv.js';
-import { cleanSettings, EMPTY_STATUS, K, loadAll, saveCmds } from '../server/store.js';
+import { cleanSettings, EMPTY_STATUS, K, loadAll, PK, saveCmds } from '../server/store.js';
 import { acquireLock, releaseLock } from '../server/scan.js';
 import { hasProfile, MAIN, settingsFor } from '../src/engine/profiles.js';
+import { history } from '../src/engine/archive.js';
 import { vapidReady } from '../server/push.js';
 
 const MAX_BODY = 4_000_000;
@@ -42,10 +43,14 @@ export async function GET(req: Request): Promise<Response> {
     const status = { ...EMPTY_STATUS, ...(rawSt ? JSON.parse(rawSt) : {}) };
     const base = { now: Date.now(), status, pushed: +(pushed ?? 0), devices: Math.floor((subs?.length ?? 0) / 2), ...env() };
     if (have !== null && +have === status.ver) return json({ ...base, unchanged: true });
-    const main = await loadAll(kv);
-    const profile = want !== MAIN && hasProfile(main.settings, want) ? want : MAIN;
-    const all = profile === MAIN ? main : await loadAll(kv, profile);
-    return json({ ...base, profile, status: all.status, settings: all.settings, journal: all.journal, model: all.model });
+    const sRaw = await kv.cmd('GET', K.settings);
+    const shared = cleanSettings(sRaw ? JSON.parse(sRaw) : {});
+    const profile = want !== MAIN && hasProfile(shared, want) ? want : MAIN;
+    // recent trades (closed + still open); the compact archive only when it changed since the app's copy
+    const av = status.av?.[profile] ?? 0;
+    const sendArchive = q.get('av') !== String(av);
+    const all = await loadAll(kv, profile, { archive: sendArchive, recent: 600 });
+    return json({ ...base, profile, status: all.status, settings: all.settings, journal: all.journal, model: all.model, av, ...(sendArchive ? { archive: all.archive } : {}) });
   } catch (e: any) {
     return json({ error: `Server storage error: ${e?.message ?? e}` }, 500);
   }
@@ -88,7 +93,7 @@ export async function POST(req: Request): Promise<Response> {
     const reqProfile = typeof body?.profile === 'string' ? body.profile.trim().toLowerCase() : MAIN;
     const head = await loadAll(kv);
     const profile = reqProfile !== MAIN && hasProfile(head.settings, reqProfile) ? reqProfile : MAIN;
-    const st = profile === MAIN ? head : await loadAll(kv, profile);
+    const st = await loadAll(kv, profile, body?.action === 'import' || body?.action === 'retrain');
     const ps = settingsFor(st.settings, profile);
     const bump = { ...st.status, ver: st.status.ver + 1 };
     switch (body?.action) {
@@ -101,7 +106,7 @@ export async function POST(req: Request): Promise<Response> {
         const list = Array.isArray(body.entries) ? body.entries.filter(validEntry) : [];
         const have = new Set(st.journal.map((e) => e.signal.id));
         let added = 0;
-        const journal = [...st.journal];
+        const journal = [...st.live]; // imported trades join the live journal; the next scan files them away
         for (const e of list as JournalEntry[]) {
           if (have.has(e.signal.id)) continue;
           have.add(e.signal.id);
@@ -109,16 +114,17 @@ export async function POST(req: Request): Promise<Response> {
           added++;
         }
         journal.sort((a, b) => a.signal.time - b.signal.time);
-        const model = retrain(journal, ps, st.model);
+        const model = retrain(history(st.archive, [...st.journal, ...journal.filter((e) => !st.live.includes(e))], ps), ps, st.model);
         await kv.pipe(saveCmds({ journal, model: model ?? st.model, status: bump, profile }));
         return json({ ok: true, added, rejected: (body.entries?.length ?? 0) - list.length, ver: bump.ver });
       }
       case 'clear': {
-        await kv.pipe(saveCmds({ journal: [], model: null, status: bump, profile }));
+        const k = PK(profile);
+        await kv.pipe([...saveCmds({ journal: [], model: null, status: { ...bump, av: { ...(bump.av ?? {}), [profile]: (bump.av?.[profile] ?? 0) + 1 } }, profile }), ['DEL', k.archive], ['DEL', k.shown], ['DEL', k.silent], ['DEL', k.digest]]);
         return json({ ok: true, ver: bump.ver });
       }
       case 'retrain': {
-        const model = retrain(st.journal, ps, st.model);
+        const model = retrain(history(st.archive, st.journal, ps), ps, st.model);
         await kv.pipe(saveCmds({ model: model ?? st.model, status: bump, profile }));
         return json({ ok: true, trained: !!model, ver: bump.ver });
       }

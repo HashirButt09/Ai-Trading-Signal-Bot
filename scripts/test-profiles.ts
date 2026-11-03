@@ -4,7 +4,8 @@ import { DEFAULT_SETTINGS, type Candle, type JournalEntry, type Settings } from 
 import { TF_MS } from '../src/engine/time';
 import { memoryKv } from '../server/kv';
 import { runScan, EXTRA_PROFILE_BUDGET_MS } from '../server/scan';
-import { cleanSettings, K, PK } from '../server/store';
+import { cleanSettings, K, loadAll, PK } from '../server/store';
+const recent = async (kvx: any, id = 'main') => (await loadAll(kvx, id, true)).journal;
 import { cleanProfiles, MAIN, profileList, settingsFor, withTuned } from '../src/engine/profiles';
 import { loadAgent, paramsOf, resumeAgent, runAgent } from '../server/agent';
 
@@ -80,9 +81,12 @@ await kv.cmd('SET', PK('15m').cursor, JSON.stringify(Object.fromEntries(PAIRS.ma
 
 const deps = { kv, klines, send, now: () => NOW };
 const rep = await runScan(deps);
-const j15 = JSON.parse(mem.get(PK('15m').journal) ?? '[]') as JournalEntry[];
+const j15 = await recent(kv, '15m');
 ok(!rep.skipped && rep.profiles?.['15m']?.processed.length === 3, `15m bot scanned all pairs (${rep.profiles?.['15m']?.processed.length ?? 0})`);
-ok(mem.get(K.journal) === mainJournal && mem.get(K.model) === mainModel, 'main 5m journal and model are byte-for-byte unchanged');
+{
+  const m = await recent(kv);
+  ok(m.length === 1 && JSON.stringify(m[0]) === JSON.stringify(JSON.parse(mainJournal)[0]) && mem.get(K.model) === mainModel, "the main 5m bot's trades and model are unchanged (its closed trade was only filed away)");
+}
 ok(j15.length > 0, `15m bot found its own setups (${j15.length})`);
 ok(j15.every((e) => e.signal.ltf === '15m' && e.signal.htf === '4h'), 'every 15m journal entry is a 15m / 4h trade');
 ok(!calls.includes('5m') && calls.includes('15m') && calls.includes('4h'), 'only 15m / 4h candles were fetched while the main bot was up to date');
@@ -96,7 +100,7 @@ NOW += 5 * 60_000;
 const rep2 = await runScan(deps);
 ok(rep2.processed.length === 3 && !(rep2.profiles?.['15m']?.processed.length), 'between 15m closes only the 5m bot scans');
 ok(!calls.includes('15m'), 'no 15m candles fetched before the 15m candle closes');
-const jMain = JSON.parse(mem.get(K.journal)!) as JournalEntry[];
+const jMain = await recent(kv);
 ok(jMain.every((e) => e.signal.ltf === '5m'), '15m entries never enter the 5m journal');
 
 // learning stays separate
@@ -143,14 +147,14 @@ ok(active15 <= settings.maxOpenTrades, `15m bot respects max open trades on its 
   const state = await import('../api/state');
   const rq = (path: string, method = 'GET', body?: unknown) => new Request(`https://app.test${path}`, { method, headers: { 'content-type': 'application/json', 'x-app-key': 'pw' }, body: body === undefined ? undefined : JSON.stringify(body) });
   let r: any = await (await state.GET(rq('/api/state?profile=15m'))).json();
-  ok(r.profile === '15m' && r.journal.length === JSON.parse(mem.get(PK('15m').journal)!).length && r.journal.every((e: JournalEntry) => e.signal.ltf === '15m'), 'GET /api/state?profile=15m returns the 15m journal');
+  ok(r.profile === '15m' && r.journal.length === (await recent(kv, '15m')).length && r.journal.length > 0 && r.journal.every((e: JournalEntry) => e.signal.ltf === '15m'), 'GET /api/state?profile=15m returns the 15m journal');
   r = await (await state.GET(rq('/api/state'))).json();
   ok(r.profile === 'main' && r.journal.every((e: JournalEntry) => e.signal.ltf === '5m'), 'GET /api/state without a profile returns the main journal (old app keeps working)');
   r = await (await state.GET(rq('/api/state?profile=nope'))).json();
   ok(r.profile === 'main', 'unknown profile falls back to the main bot');
-  const mainBefore = mem.get(K.journal);
+  const mainBefore = JSON.stringify(await recent(kv));
   r = await (await state.POST(rq('/api/state', 'POST', { action: 'clear', profile: '15m' }))).json();
-  ok(r.ok && JSON.parse(mem.get(PK('15m').journal)!).length === 0 && mem.get(K.journal) === mainBefore, 'clearing the 15m journal leaves the main journal alone');
+  ok(r.ok && (await recent(kv, '15m')).length === 0 && JSON.stringify(await recent(kv)) === mainBefore, 'clearing the 15m journal leaves the main journal alone');
   (globalThis as any).fetch = real;
 }
 

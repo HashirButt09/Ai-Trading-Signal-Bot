@@ -90,6 +90,31 @@ export function memoryKv(): Kv & { data: Map<string, any> } {
         for (const f of rest) if (h?.delete(f)) n++;
         return n;
       }
+      case 'RPUSH': {
+        const l: string[] = data.get(k) ?? [];
+        l.push(...rest);
+        data.set(k, l);
+        return l.length;
+      }
+      case 'LLEN':
+        return (data.get(k) as string[] | undefined)?.length ?? 0;
+      case 'LRANGE': {
+        const l: string[] = data.get(k) ?? [];
+        const n = l.length;
+        let a = +rest[0], b = +rest[1];
+        if (a < 0) a = Math.max(0, n + a);
+        if (b < 0) b = n + b;
+        return l.slice(a, Math.min(n - 1, b) + 1);
+      }
+      case 'LTRIM': {
+        const l: string[] = data.get(k) ?? [];
+        const n = l.length;
+        let a = +rest[0], b = +rest[1];
+        if (a < 0) a = Math.max(0, n + a);
+        if (b < 0) b = n + b;
+        data.set(k, l.slice(a, Math.min(n - 1, b) + 1));
+        return 'OK';
+      }
       case 'HGETALL': {
         const h: Map<string, string> | undefined = data.get(k);
         return h ? [...h.entries()].flat() : [];

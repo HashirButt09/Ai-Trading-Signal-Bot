@@ -1,7 +1,7 @@
 import type { Candle, JournalEntry, Settings } from './types.js';
 import { buildHtf } from './regime.js';
 import { buildLtf, evaluate, WARMUP } from './strategies.js';
-import { advanceEntry, computeStats, rUsd, toSamples, type Stats } from './journal.js';
+import { advanceEntry, computeStats, isTracking, newEntry, rUsd, toSamples, type Stats } from './journal.js';
 import { predictMeta, trainMeta, type MetaModel } from './meta.js';
 
 export interface BtTrade {
@@ -43,13 +43,17 @@ export function runBacktest(symbol: string, ltfCandles: Candle[], htfCandles: Ca
     const r = evaluate(symbol, L, i, H, s, B);
     if (!r.signal) continue;
 
-    let e: JournalEntry = { signal: r.signal, status: 'ACTIVE', outcome: 'OPEN', rNet: 0, barsOpen: 0 };
+    let e: JournalEntry = newEntry(r.signal, 'ACTIVE');
     let j = i + 1;
+    let exit = -1;
+    // follow the trade to its exit, and keep following the exit-lab plans until they finish too
     for (; j < ltfCandles.length; j++) {
       e = advanceEntry(e, ltfCandles[j], s);
-      if (e.outcome !== 'OPEN') break;
+      if (exit < 0 && e.outcome !== 'OPEN') exit = j;
+      if (!isTracking(e)) break;
     }
     if (e.outcome === 'OPEN') break; // ran out of data - ignore unresolved trade
+    j = exit;
     trades.push({ entry: e, exitIdx: j, pnlUsd: e.rNet * rUsd(e.signal) });
     busyUntil = j;
     cooldownUntil = j + 3;

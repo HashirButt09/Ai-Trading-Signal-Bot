@@ -98,3 +98,43 @@ export async function fetchSinglePrice(symbol: string): Promise<number | null> {
     return null;
   }
 }
+
+/**
+ * Live futures context for the server: funding rate of every pair (one request) and the change in open
+ * interest over the last hour (one small request per pair). Best effort with a short overall time limit:
+ * whatever is missing is simply unknown.
+ */
+export async function fetchMarketCtx(symbols: string[], budgetMs = 8000): Promise<Record<string, { funding?: number; oiChg?: number }>> {
+  const until = Date.now() + budgetMs;
+  const out: Record<string, { funding?: number; oiChg?: number }> = {};
+  try {
+    const res = await fetch(`${REST_BASE}/fapi/v1/premiumIndex`, { signal: AbortSignal.timeout(4000) });
+    if (res.ok) {
+      const rows = (await res.json()) as { symbol: string; lastFundingRate: string }[];
+      const want = new Set(symbols);
+      for (const r of rows) if (want.has(r.symbol) && Number.isFinite(+r.lastFundingRate)) out[r.symbol] = { funding: +r.lastFundingRate };
+    }
+  } catch {
+    /* unknown funding */
+  }
+  const q = [...symbols];
+  await Promise.all(
+    [0, 1, 2, 3, 4, 5].map(async () => {
+      for (let sym = q.shift(); sym; sym = q.shift()) {
+        if (Date.now() > until) return;
+        try {
+          const r = await fetch(`${REST_BASE}/futures/data/openInterestHist?symbol=${sym}&period=5m&limit=13`, { signal: AbortSignal.timeout(3000) });
+          if (!r.ok) continue;
+          const rows = (await r.json()) as { sumOpenInterest: string }[];
+          if (rows.length >= 2) {
+            const a = +rows[0].sumOpenInterest, b = +rows[rows.length - 1].sumOpenInterest;
+            if (a > 0 && Number.isFinite(b)) out[sym] = { ...out[sym], oiChg: b / a - 1 };
+          }
+        } catch {
+          /* unknown for this pair */
+        }
+      }
+    })
+  );
+  return out;
+}
