@@ -5,6 +5,7 @@ export interface Candle {
   l: number;
   c: number;
   v: number;
+  tb?: number; // taker buy volume (Binance kline field 9): the part of the volume that was aggressive buying
 }
 
 export type Regime = 'TREND_BULL' | 'TREND_BEAR' | 'RANGE' | 'CHOP';
@@ -29,7 +30,10 @@ export type StrategyId =
   | 'RSI_DIVERGENCE'
   | 'SESSION_ORB'
   | 'DONCHIAN_BREAKOUT'
-  | 'EMA200_BOUNCE';
+  | 'EMA200_BOUNCE'
+  | 'SMC_CHOCH_FVG'
+  | 'CIPHER_B'
+  | 'XABC_FIB';
 
 export const STRATEGY_LABEL: Record<StrategyId, string> = {
   TREND_FVG_RETEST: 'Trend FVG Retest',
@@ -51,7 +55,10 @@ export const STRATEGY_LABEL: Record<StrategyId, string> = {
   RSI_DIVERGENCE: 'RSI Divergence at Range Edge',
   SESSION_ORB: 'Session Opening Range Breakout',
   DONCHIAN_BREAKOUT: 'Donchian Trend Breakout',
-  EMA200_BOUNCE: 'EMA 200 Trend Bounce'
+  EMA200_BOUNCE: 'EMA 200 Trend Bounce',
+  SMC_CHOCH_FVG: 'SMC CHoCH + FVG Retest',
+  CIPHER_B: 'Cipher B Dot + Divergence',
+  XABC_FIB: 'XABC Fibonacci (Trend Fib)'
 };
 export const ALL_STRATEGIES = Object.keys(STRATEGY_LABEL) as StrategyId[];
 
@@ -61,8 +68,25 @@ export const ALL_STRATEGIES = Object.keys(STRATEGY_LABEL) as StrategyId[];
  */
 export const PROBATION: ReadonlySet<StrategyId> = new Set<StrategyId>([
   'BREAK_RETEST', 'VWAP_RECLAIM', 'ORDER_BLOCK', 'BB_SQUEEZE',
-  'DAY_SWEEP', 'FUNDING_FADE', 'RSI_DIVERGENCE', 'SESSION_ORB', 'DONCHIAN_BREAKOUT', 'EMA200_BOUNCE'
+  'DAY_SWEEP', 'FUNDING_FADE', 'RSI_DIVERGENCE', 'SESSION_ORB', 'DONCHIAN_BREAKOUT', 'EMA200_BOUNCE',
+  'SMC_CHOCH_FVG', 'CIPHER_B', 'XABC_FIB'
 ]);
+
+/**
+ * Extra context the AI filter learns from (append-only: new entries go at the end, never in between).
+ * Agreement values are +1 when the reading supports the trade's direction, -1 when it is against it.
+ */
+export const EXTRA_KEYS = [
+  'wt2', 'cipherAgree', 'rsiMfiAgree', // VuManChu Cipher B
+  'smcAgree', 'chochAgree', 'structPos', 'inFvgAgree', // SMC structures and FVG
+  'xabcAgree', 'xabcPos', // TraderDemircan trend Fibonacci / XABC
+  'cvdAgree', 'cvdDivAgree', // order flow
+  'pwhDist', 'pwlDist', 'pocDist', 'inValue', 'roomR', // big levels and volume profile
+  'g_major', 'g_l1', 'g_l2', 'g_meme', 'g_ai', 'g_defi', 'g_other', // coin group
+  'weekend', 'dowSin', 'dowCos', 'monthEnd', 'fundingSoon', // calendar
+  'liq' // 24h traded value (log10 of USDT)
+] as const;
+export type ExtraKey = (typeof EXTRA_KEYS)[number];
 
 /**
  * Exit lab: every setup is followed with four exit plans at once, so each playbook can switch to the one
@@ -88,6 +112,7 @@ export interface PlanState {
 export interface MarketCtx {
   funding?: number; // current funding rate (fraction per 8h, e.g. 0.0001 = 0.01%)
   oiChg?: number; // open interest change over the last hour (fraction)
+  qv24?: number; // traded value over the last 24 hours (USDT)
 }
 /** trades a learning strategy needs before it can go live */
 export const PROMOTE_MIN_TRADES = 40;
@@ -106,6 +131,7 @@ export interface Features {
   btcVol?: number; // BTC's ATR on the regime timeframe, in % of price
   pdhDist?: number; // distance up to the previous UTC day's high, in ATR (negative = above it)
   pdlDist?: number; // distance down to the previous UTC day's low, in ATR (negative = below it)
+  extra?: number[]; // values in EXTRA_KEYS order
 }
 
 /** Rule thresholds the AI agent may tune (inside hard bounds). Defaults = the original fixed rules. */
@@ -171,6 +197,9 @@ export interface Settings {
   ignoreFrom: number; // ignore trades that were open or resolved inside [ignoreFrom, ignoreTo] (0 = off)
   ignoreTo: number;
   profiles: ProfileCfg[]; // extra timeframe bots beside the main one
+  dailyLossLimitR: number; // no new signals for the rest of the UTC day after the shown signals lost this many R (0 = off)
+  maxPerGroup: number; // open signals at once per coin group (majors, memes, AI, ...; 0 = no limit)
+  equityCurveFilter: boolean; // cool a playbook off while its last 10 results average below -0.5R
   editedAt: number; // when settings were last changed on this device (newer side wins when syncing)
 }
 
@@ -270,7 +299,10 @@ export const DEFAULT_SETTINGS: Settings = {
     RSI_DIVERGENCE: true,
     SESSION_ORB: true,
     DONCHIAN_BREAKOUT: true,
-    EMA200_BOUNCE: true
+    EMA200_BOUNCE: true,
+    SMC_CHOCH_FVG: true,
+    CIPHER_B: true,
+    XABC_FIB: true
   },
   metaThreshold: 0.5,
   metaMinSamples: 40,
@@ -291,6 +323,9 @@ export const DEFAULT_SETTINGS: Settings = {
   ignoreFrom: BUG_WINDOW_FROM,
   ignoreTo: BUG_WINDOW_TO,
   profiles: [{ id: '15m', ltf: '15m', htf: '4h', enabled: true }],
+  dailyLossLimitR: 3,
+  maxPerGroup: 2,
+  equityCurveFilter: true,
   editedAt: 0
 };
 
@@ -353,5 +388,6 @@ export interface JournalEntry {
   exits?: Partial<Record<ExitPlanId, PlanState>>; // exit lab: how each plan did on this setup
   labBars?: number; // candles the exit lab has followed this setup
   archived?: boolean; // rebuilt from the compact learning archive (no write-up or chart levels)
+  filterBits?: { pass: number; known: number }; // filter-lab results kept in the digest (bit i = FILTERS[i])
   be?: boolean; // the trade's own break-even stop is armed
 }

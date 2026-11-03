@@ -76,13 +76,15 @@ function sig(strategy: StrategyId = 'TREND_FVG_RETEST', t = T0, symbol = 'XUSDT'
 
 // ---------- 4) learning archive ----------
 {
-  const e = { ...newEntry({ ...sig('RSI_DIVERGENCE', T0), pWin: 0.61, patterns: ['hammer'], features: { ...sig().features, funding: 6.5, oiChg: 1.2, btcVol: 0.9, pdhDist: 1.5, pdlDist: 3 } }, 'FILTERED'), outcome: 'LOSS' as const, rNet: -1.13, resolvedAt: T0 + 7_200_000, exits: { A: { outcome: 'LOSS' as const, rNet: -1.13 }, B: { outcome: 'LOSS' as const, rNet: -1.13 }, C: { outcome: 'LOSS' as const, rNet: -1.13 }, D: { outcome: 'EXPIRED' as const, rNet: 0 } } };
+  const e = { ...newEntry({ ...sig('RSI_DIVERGENCE', T0), pWin: 0.61, patterns: ['hammer'], features: { ...sig().features, funding: 6.5, oiChg: 1.2, btcVol: 0.9, pdhDist: 1.5, pdlDist: 3, extra: [...Array.from({ length: 16 }, (_, j) => +((j % 3) - 1 + j / 7).toFixed(3)), 0, 0, 0, 1, 0, 0, 0, ...(() => { const k = (Date.UTC(2026, 5, 1) + 300_000); const d = new Date(k); return [0, +Math.sin((2 * Math.PI * d.getUTCDay()) / 7).toFixed(3), +Math.cos((2 * Math.PI * d.getUTCDay()) / 7).toFixed(3), 0, 0]; })(), 8.31] } }, 'FILTERED'), outcome: 'LOSS' as const, rNet: -1.13, resolvedAt: T0 + 7_200_000, exits: { A: { outcome: 'LOSS' as const, rNet: -1.13 }, B: { outcome: 'LOSS' as const, rNet: -1.13 }, C: { outcome: 'LOSS' as const, rNet: -1.13 }, D: { outcome: 'EXPIRED' as const, rNet: 0 } } };
   const d = decode(encode(e), S);
   ok(d.signal.id === e.signal.id && d.signal.strategy === 'RSI_DIVERGENCE' && d.status === 'FILTERED' && d.outcome === 'LOSS' && d.rNet === -1.13 && d.resolvedAt === e.resolvedAt, 'archive keeps id, playbook, status, result and timing');
-  ok(featurize(d.signal).join() === featurize(e.signal).join(), 'archive keeps exactly what the AI learns from');
+  const fa = featurize(d.signal), fb = featurize(e.signal);
+  const maxDiff = Math.max(...fa.map((x, j) => Math.abs(x - fb[j])));
+  ok(fa.length === fb.length && maxDiff <= 0.006, `archive keeps what the AI learns from (largest rounding difference ${maxDiff.toFixed(4)})`);
   ok(d.exits!.D!.rNet === 0 && d.exits!.A!.rNet === -1.13, 'archive keeps the exit-lab results');
   const bytes = JSON.stringify(encode(e)).length;
-  ok(bytes < 200, `one archived trade is about ${bytes} bytes (a full journal entry is several times larger)`);
+  ok(bytes < 260, `one archived trade is about ${bytes} bytes (a full journal entry is several times larger)`);
 
   // budget: 60 days of shown signals and 60 per playbook always kept, newest of the rest until full
   const recs: Rec[] = [];

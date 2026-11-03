@@ -7,6 +7,7 @@ import { CHART_FAMILY, CHART_NAME, detectChartPattern } from './chartpatterns.js
 import { detectCandles, PATTERN_INFO } from './patterns.js';
 import { TF_MS } from './time.js';
 import { rsi, vwap } from './ta.js';
+import { calendar, cipher, coinGroup, COIN_GROUPS, cvdDivergence, cvdSlope, delta, openFvgs, prevWeek, structure, volumeProfile, xabc, type Cipher, type Structure } from './flow.js';
 
 export interface LtfCtx {
   candles: Candle[];
@@ -21,6 +22,9 @@ export interface LtfCtx {
   ema200: number[];
   pdh: number[]; // previous UTC day's high (NaN when that day is not fully in the data)
   pdl: number[]; // previous UTC day's low
+  cipher: Cipher; // VuManChu Cipher B (WaveTrend)
+  smc: Structure; // SMC structures (BOS / CHoCH)
+  delta: number[]; // taker buy - sell volume per candle
 }
 
 const DAY = 86_400_000;
@@ -67,7 +71,10 @@ export function buildLtf(candles: Candle[]): LtfCtx {
     bbDev,
     rsi: rsi(closes, 14),
     ema200: ema(closes, 200),
-    ...prevDay(candles)
+    ...prevDay(candles),
+    cipher: cipher(candles),
+    smc: structure(candles),
+    delta: delta(candles)
   };
 }
 
@@ -91,6 +98,8 @@ interface Raw {
   chart?: { level: number; height: number };
   candle?: { move: number };
   level?: number; // key level of the newer playbooks (broken level, VWAP, order block edge, band)
+  cipherDiv?: boolean;
+  xabc?: { x: number; a: number; b: number; c: number; bLevel: number };
 }
 
 // ---------------- candlestick reversal (from the pattern notes) ----------------
@@ -642,6 +651,169 @@ export function exitPlans(L: LtfCtx, i: number, side: Side, entry: number, sl: n
 }
 void EXIT_PLANS;
 
+
+// ---------------- your TradingView scripts as playbooks ----------------
+
+/**
+ * VuManChu Cipher B: a WaveTrend buy (sell) dot - the waves cross up while oversold (down while
+ * overbought) - backed by a WaveTrend divergence in the last 8 candles or a rising (falling) RSI+MFI
+ * area. No buy on a gold dot (the script's own advice). Not taken against the higher-timeframe trend.
+ */
+function cipherB(L: LtfCtx, i: number, regime: Regime, tpR: number): Raw | null {
+  const c = L.candles, C = L.cipher;
+  const a = L.atr[i];
+  if (!Number.isFinite(a) || i < 70) return null;
+  for (const long of [true, false]) {
+    if (long && regime === 'TREND_BEAR') continue;
+    if (!long && regime === 'TREND_BULL') continue;
+    const dot = long ? C.buy[i] || C.buy[i - 1] : C.sell[i] || C.sell[i - 1];
+    if (!dot) continue;
+    let div = false, gold = false;
+    for (let k = i - 8; k <= i; k++) {
+      if (long ? C.bullDiv[k] : C.bearDiv[k]) div = true;
+      if (k >= i - 3 && C.gold[k]) gold = true;
+    }
+    const mfi = long ? C.rsiMfi[i] > C.rsiMfi[i - 3] : C.rsiMfi[i] < C.rsiMfi[i - 3];
+    if (!(div || mfi) || (long && gold)) continue;
+    const x = c[i];
+    if (long ? bodyDir(x) <= 0 : bodyDir(x) >= 0) continue;
+    let ext = long ? Infinity : -Infinity;
+    for (let k = i - 5; k <= i; k++) ext = long ? Math.min(ext, c[k].l) : Math.max(ext, c[k].h);
+    const sl = long ? ext - 0.2 * a : ext + 0.2 * a;
+    const risk = Math.abs(x.c - sl);
+    if (risk <= 0 || risk > 3 * a) continue;
+    const tp = long ? x.c + tpR * risk : x.c - tpR * risk;
+    const trendAligned = (long && regime === 'TREND_BULL') || (!long && regime === 'TREND_BEAR') ? 1 : 0;
+    return { strategy: 'CIPHER_B', side: long ? 'LONG' : 'SHORT', entry: x.c, sl, tp, trendAligned, level: ext, cipherDiv: div };
+  }
+  return null;
+}
+
+/**
+ * SMC (LudoGH68 structures + FVG): after a change of character (CHoCH) into a new structure, the first
+ * pullback into an unmitigated Fair Value Gap in the discount half (premium half for shorts) of the
+ * structure, closing back out in the new direction. Target: the structure extreme when it is 1.2R-4R away.
+ */
+function smcChochFvg(L: LtfCtx, i: number, tpR: number): Raw | null {
+  const c = L.candles, S = L.smc;
+  const a = L.atr[i];
+  if (!Number.isFinite(a) || i < 60 || S.dir[i] === 0) return null;
+  const long = S.dir[i] === 1;
+  let choch = -1;
+  for (let k = i; k >= i - 40; k--) if (S.event[k] === (long ? 2 : -2)) { choch = k; break; }
+  if (choch < 0 || choch >= i) return null;
+  const hi = S.hi[i], lo = S.lo[i];
+  if (!(hi > lo)) return null;
+  const x = c[i];
+  const gaps = openFvgs(c, i - 1, 60).filter((g) => g.bull === long && g.born >= choch - 3);
+  for (const g of gaps.reverse()) {
+    const inZone = long ? g.top <= lo + 0.5 * (hi - lo) : g.bottom >= hi - 0.5 * (hi - lo);
+    const tapped = long ? x.l <= g.top && x.l >= g.bottom - 0.3 * a : x.h >= g.bottom && x.h <= g.top + 0.3 * a;
+    const back = long ? x.c > g.top && bodyDir(x) > 0 : x.c < g.bottom && bodyDir(x) < 0;
+    if (!inZone || !tapped || !back) continue;
+    const sl = long ? Math.min(g.bottom, x.l) - 0.2 * a : Math.max(g.top, x.h) + 0.2 * a;
+    const risk = Math.abs(x.c - sl);
+    if (risk <= 0 || risk > 3 * a) continue;
+    const ext = long ? hi : lo;
+    const extR = Math.abs(ext - x.c) / risk;
+    const tp = extR >= 1.2 && extR <= 4 ? ext : long ? x.c + tpR * risk : x.c - tpR * risk;
+    return { strategy: 'SMC_CHOCH_FVG', side: long ? 'LONG' : 'SHORT', entry: x.c, sl, tp, trendAligned: 1, zone: { top: g.top, bottom: g.bottom }, level: long ? g.top : g.bottom, rangeHigh: hi, rangeLow: lo };
+  }
+  return null;
+}
+
+/**
+ * TraderDemircan Trend Fibonacci + XABC: after a move from X (50-candle extreme) to A, price retraces to
+ * B (0.382 or 0.5) and is rejected there. Target C = B - (X - A), stop beyond the next Fibonacci level.
+ */
+function xabcFib(L: LtfCtx, i: number, regime: Regime, tpR: number): Raw | null {
+  const c = L.candles;
+  const a = L.atr[i];
+  if (!Number.isFinite(a) || i < 60) return null;
+  for (const bear of [true, false]) {
+    if (bear && regime === 'TREND_BULL') continue;
+    if (!bear && regime === 'TREND_BEAR') continue;
+    const f = xabc(c, i, bear, 50);
+    if (!f) continue;
+    const diff = Math.abs(f.x - f.a);
+    if (diff < 3 * a) continue; // a real swing, not noise
+    const x = c[i];
+    const touched = bear ? x.h >= f.b - 0.15 * a : x.l <= f.b + 0.15 * a;
+    const rejected = bear ? x.c < f.b && bodyDir(x) < 0 : x.c > f.b && bodyDir(x) > 0;
+    if (!touched || !rejected) continue;
+    const nextLvl = f.bLevel === 0.5 ? 0.618 : 0.5;
+    const sl = bear ? f.a + nextLvl * diff + 0.2 * a : f.a - nextLvl * diff - 0.2 * a;
+    const risk = Math.abs(x.c - sl);
+    if (risk <= 0 || risk > 3 * a || (bear ? sl <= x.c : sl >= x.c)) continue;
+    const cR = Math.abs(f.c - x.c) / risk;
+    const tp = cR >= 1.2 && cR <= 5 ? f.c : bear ? x.c - tpR * risk : x.c + tpR * risk;
+    return { strategy: 'XABC_FIB', side: bear ? 'SHORT' : 'LONG', entry: x.c, sl, tp, trendAligned: (bear && regime === 'TREND_BEAR') || (!bear && regime === 'TREND_BULL') ? 1 : 0, level: f.b, xabc: { x: f.x, a: f.a, b: f.b, c: f.c, bLevel: f.bLevel } };
+  }
+  return null;
+}
+
+/**
+ * Context readings for the AI filter (EXTRA_KEYS order). Signs: +1 supports the trade's direction.
+ */
+export function extraFeatures(L: LtfCtx, H: HtfCtx, i: number, symbol: string, side: Side, entry: number, sl: number, closeTime: number, market?: MarketCtx): number[] {
+  const c = L.candles, C = L.cipher, S = L.smc;
+  const dir = side === 'LONG' ? 1 : -1;
+  const a = L.atr[i] || 1e-12;
+  const risk = Math.abs(entry - sl) || 1e-12;
+  // Cipher B
+  let dot = 0;
+  for (let k = i; k >= Math.max(0, i - 6) && !dot; k--) dot = C.buy[k] ? 1 : C.sell[k] ? -1 : 0;
+  const wt2 = Number.isFinite(C.wt2[i]) ? C.wt2[i] / 100 : 0;
+  const mfi = Number.isFinite(C.rsiMfi[i]) ? Math.sign(C.rsiMfi[i]) * dir : 0;
+  // SMC
+  let ev = 0;
+  for (let k = i; k >= Math.max(0, i - 40) && !ev; k--) ev = S.event[k];
+  const chochAgree = ev ? Math.sign(ev) * dir * (Math.abs(ev) === 2 ? 1 : 0.5) : 0;
+  const rng = S.hi[i] - S.lo[i];
+  const structPos = rng > 0 ? (dir === 1 ? (c[i].c - S.lo[i]) / rng : (S.hi[i] - c[i].c) / rng) : 0.5;
+  let inFvg = 0;
+  for (const g of openFvgs(c, i, 40)) if (c[i].c <= g.top + 0.1 * a && c[i].c >= g.bottom - 0.1 * a) inFvg = (g.bull ? 1 : -1) * dir;
+  // XABC
+  let xAgree = 0, xPos = 0;
+  const fb = xabc(c, i, true, 50), fu = xabc(c, i, false, 50);
+  const near = (f: ReturnType<typeof xabc>) => !!f && Math.abs(c[i].c - f.b) <= 0.5 * a;
+  if (near(fb)) xAgree = -dir;
+  else if (near(fu)) xAgree = dir;
+  const f = fb ?? fu;
+  if (f) xPos = Math.abs(c[i].c - f.a) / (Math.abs(f.x - f.a) || 1);
+  // order flow
+  const sl10 = cvdSlope(c, L.delta, i, 10);
+  const cvdAgree = Number.isFinite(sl10) ? sl10 * dir : 0;
+  const cvdDiv = cvdDivergence(c, L.delta, i, 12) * dir;
+  // levels
+  const pw = prevWeek(H.candles, closeTime);
+  const vp = volumeProfile(c, i, 288);
+  const pwhDist = pw ? (pw.h - c[i].c) / a : 0;
+  const pwlDist = pw ? (c[i].c - pw.l) / a : 0;
+  const pocDist = vp ? ((c[i].c - vp.poc) / a) * dir : 0;
+  const inValue = vp ? (c[i].c >= vp.val && c[i].c <= vp.vah ? 1 : 0) : 0;
+  const levels = [L.pdh[i], L.pdl[i], pw?.h, pw?.l, vp?.poc, vp?.vah, vp?.val].filter((x): x is number => Number.isFinite(x as number));
+  let room = 10;
+  for (const lv of levels) {
+    const d = (lv - entry) * dir;
+    if (d > 0.05 * risk) room = Math.min(room, d / risk);
+  }
+  // coin group, calendar, liquidity
+  const g = coinGroup(symbol);
+  const cal = calendar(closeTime);
+  const liq = market?.qv24 && market.qv24 > 0 ? Math.log10(market.qv24) : 0;
+  return [
+    wt2, dot * dir, mfi,
+    S.dir[i] * dir, chochAgree, structPos, inFvg,
+    xAgree, xPos,
+    cvdAgree, cvdDiv,
+    pwhDist, pwlDist, pocDist, inValue, room,
+    ...COIN_GROUPS.map((x) => (x === g ? 1 : 0)),
+    cal.weekend, cal.dowSin, cal.dowCos, cal.monthEnd, cal.fundingSoon,
+    liq
+  ].map((v) => (Number.isFinite(v) ? +v.toFixed(3) : 0));
+}
+
 /** BTC's ATR on the regime timeframe as % of price, at a moment */
 export function btcVolAt(btc: HtfCtx | null | undefined, closeTime: number, htf: string): number | undefined {
   if (!btc) return undefined;
@@ -730,6 +902,9 @@ export function evaluate(
     if (!raw && en.SESSION_ORB) raw = sessionOrb(L, i, regime, settings.tpR, step);
     if (!raw && trend && en.DONCHIAN_BREAKOUT) raw = donchianBreakout(trend, L, i, settings.tpR);
     if (!raw && trend && en.EMA200_BOUNCE) raw = ema200Bounce(trend, L, i, settings.tpR);
+    if (!raw && en.SMC_CHOCH_FVG) raw = smcChochFvg(L, i, settings.tpR);
+    if (!raw && en.CIPHER_B) raw = cipherB(L, i, regime, settings.tpR);
+    if (!raw && en.XABC_FIB) raw = xabcFib(L, i, regime, settings.tpR);
   }
 
   if (!raw) return { regime, adx: ri.adx, signal: null };
@@ -753,7 +928,8 @@ export function evaluate(
     oiChg: market?.oiChg !== undefined ? +(market.oiChg * 100).toFixed(2) : undefined,
     btcVol: btcVolAt(btc, closeTime, settings.htf),
     pdhDist: Number.isFinite(L.pdh[i]) ? +((L.pdh[i] - x.c) / L.atr[i]).toFixed(2) : undefined,
-    pdlDist: Number.isFinite(L.pdl[i]) ? +((x.c - L.pdl[i]) / L.atr[i]).toFixed(2) : undefined
+    pdlDist: Number.isFinite(L.pdl[i]) ? +((x.c - L.pdl[i]) / L.atr[i]).toFixed(2) : undefined,
+    extra: extraFeatures(L, H, i, symbol, raw.side, raw.entry, raw.sl, closeTime, market)
   };
 
   const base = {
@@ -783,7 +959,9 @@ export function evaluate(
           swept: raw.swept,
           rangeHigh: raw.rangeHigh,
           rangeLow: raw.rangeLow,
-          level: raw.level
+          level: raw.level,
+          cipherDiv: raw.cipherDiv,
+          xabc: raw.xabc
         });
 
   const patterns = detectCandles(c, i);

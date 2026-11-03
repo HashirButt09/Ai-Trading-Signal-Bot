@@ -517,6 +517,33 @@ export const LIBRARY: Entry[] = [
     related: ['ema', 'trend_structure', 'TREND_EMA_PULLBACK']
   },
   {
+    id: 'SMC_CHOCH_FVG', cat: 'bot', title: 'Playbook: SMC CHoCH + FVG Retest (learning mode)',
+    summary: 'From your SMC Structures and FVG script: after a change of character, the first pullback into a fresh Fair Value Gap in the discount (premium) half of the new structure.',
+    identify: 'Structure breaks are confirmed by a candle close beyond the last structure high or low (BOS continues the trend, CHoCH flips it). Within 40 candles of a CHoCH, price taps an unmitigated FVG of the new direction that sits in the lower half of the structure for longs (upper half for shorts) and closes back out of it.',
+    meaning: 'The CHoCH shows the other side took control; the FVG is the imbalance their move left behind, and the discount zone is where they prefer to add.',
+    trade: 'Entry at the close out of the gap, stop beyond the gap with a small ATR buffer, target the structure extreme when it is 1.2R to 4R away, otherwise your trend R multiple.',
+    pitfalls: 'A CHoCH inside a strong higher-timeframe trend is often just a pullback. New: tracked silently until it proves itself. The same SMC readings (structure direction, CHoCH, position in the range, FVG) are also learned as filters for every other playbook.',
+    related: ['bos_choch', 'fvg', 'premium_discount', 'order_block']
+  },
+  {
+    id: 'CIPHER_B', cat: 'bot', title: 'Playbook: Cipher B Dot + Divergence (learning mode)',
+    summary: 'From VuManChu Cipher B: a WaveTrend buy dot (cross up while oversold) or sell dot (cross down while overbought), backed by a divergence or the money-flow area.',
+    identify: 'WaveTrend with channel 9, average 12, MA 3 (the script defaults). Buy dot: waves cross up with WT2 at or below -53; sell dot: cross down at or above 53. Needs a WaveTrend divergence in the last 8 candles or the RSI+MFI area turning the same way. No buy on a gold dot, as the script advises.',
+    meaning: 'Momentum is stretched and starting to turn; a divergence shows the last push had less force behind it.',
+    trade: 'Entry at the close of a candle in the signal\u2019s direction, stop beyond the extreme of the last 6 candles, target your trend R multiple. Not taken against the higher-timeframe trend.',
+    pitfalls: 'Oscillator dots fire often in strong trends and get run over; the regime rule and the learning filters are there for that. Also used as a filter (WaveTrend level, last dot, money flow) for every other playbook.',
+    related: ['divergence', 'rsi', 'volume']
+  },
+  {
+    id: 'XABC_FIB', cat: 'bot', title: 'Playbook: XABC Trend Fibonacci (learning mode)',
+    summary: 'From the TraderDemircan Trend Fibonacci + XABCD script: after a swing X to A, a rejection at B (0.382 or 0.5 retrace), targeting C = B minus the X-A move.',
+    identify: 'X is the highest high of the last 50 candles (lowest low for the mirrored long), A the lowest low after it. B is the 0.5 retrace while price is below it, otherwise 0.382. The formation is valid while price has not gone beyond B since A. The trigger candle reaches B and closes back away from it.',
+    meaning: 'A measured pullback inside a move often stalls at the 0.382 - 0.5 retracement before the move continues by a similar distance.',
+    trade: 'Entry at the rejection close, stop beyond the next Fibonacci level (0.5 or 0.618), target C when it is 1.2R to 5R away, otherwise your trend R multiple.',
+    pitfalls: 'Needs a real swing (at least 3 ATR). In a reversal the retrace keeps going to 0.618-0.786 and beyond. Also learned as a filter (price at B of a formation, position in the swing) for every other playbook.',
+    related: ['fibonacci', 'trend_structure', 'support_resistance']
+  },
+  {
     id: 'meta_filter', cat: 'bot', title: 'The learned AI filter',
     summary: 'A small model trained on your last 30 days of resolved trades that estimates each new setup’s chance of winning.',
     identify: 'It uses volatility, ADX, volume, reward-to-risk, stop size, hour, playbook and direction. Setups below the threshold are hidden from you but still tracked so it keeps learning.',

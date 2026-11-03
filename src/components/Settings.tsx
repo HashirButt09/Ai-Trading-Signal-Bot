@@ -129,11 +129,14 @@ export function Settings({ value, onChange, scanner }: { value: S; onChange: (s:
           {numField('maxLeverage', 'Leverage ceiling', 1, 'Check your pair’s max on Binance')}
           {numField('maxOpenTrades', 'Max open trades', 1, 'Max simultaneous active positions across all coins')}
           {numField('maxNewPerCandle', 'Max new trades per candle', 1, 'Max new active trades on a single candle close')}
+          {numField('dailyLossLimitR', 'Daily loss limit (R, 0 = off)', 0.5, 'After the signals you got lost this much today (UTC), new ones are only tracked until tomorrow')}
+          {numField('maxPerGroup', 'Max open trades per coin group', 1, 'Majors, L1s, L2s, memes, AI, DeFi: coins that move together (0 = no limit)')}
           {numField('tpR', 'Target for trend plays (R)', 0.1, 'Range plays always target the range midpoint')}
           {numField('minSlPct', 'Skip stops tighter than (%)', 0.01, undefined, 100)}
           {numField('takerFee', 'Taker fee per side (%)', 0.005, 'Binance futures default 0.04%', 100)}
           {numField('slippage', 'Slippage round trip (%)', 0.005, undefined, 100)}
         </div>
+        <label className="check"><input type="checkbox" checked={value.equityCurveFilter} onChange={(e) => set('equityCurveFilter', e.target.checked)} /> Cool a playbook off while its last 10 results average below -0.5R (it keeps being tracked and comes back by itself)</label>
       </div>
 
       <div className="card form">

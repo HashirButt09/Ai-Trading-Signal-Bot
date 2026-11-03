@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ALL_STRATEGIES, EXIT_LABEL, EXIT_PLANS, PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type JournalEntry, type StrategyId } from '../engine/types';
 import { btcFilter, computeStats, exitReport, independentCount } from '../engine/journal';
+import { FILTER_MIN, FILTERS, learnFilters } from '../engine/filters';
 import { isIgnored } from '../engine/types';
 import type { Scanner } from '../lib/scanner';
 import { localTime, num, pct } from '../lib/format';
@@ -41,6 +42,7 @@ export function Results({ scanner, onShow }: { scanner: Scanner; onShow: (e: Jou
   const rows = ALL_STRATEGIES.map((k) => ({ k, ...row(inView.filter((e) => e.signal.strategy === k)), ex: exitReport(all, k, s) })).sort((a, b) => b.n - a.n || ALL_STRATEGIES.indexOf(a.k) - ALL_STRATEGIES.indexOf(b.k));
   const total = row(inView);
   const btc = btcFilter(all, s);
+  const lab = useMemo(() => learnFilters(all, s), [all, s]);
 
   const status = (k: StrategyId) => {
     const h = scanner.health[k];
@@ -160,6 +162,34 @@ export function Results({ scanner, onShow }: { scanner: Scanner; onShow: (e: Jou
         </div>
         {list.length > 300 && <div className="muted small">Showing the newest 300.</div>}
         <div className="muted small">Tap a recent trade to open it on the chart with its full write-up. Older closed trades are kept as numbers only, for learning.</div>
+      </div>
+
+      <div className="card">
+        <div className="label">Filter lab: trader's filters, tested on your trades</div>
+        <div className="muted small">
+          Each filter is checked on every setup. It switches on for a strategy by itself only when the setups it would have blocked lost money and did clearly worse than the ones it lets through ({FILTER_MIN}+ of each). Includes your SMC, Cipher B and XABC readings.
+        </div>
+        <div className="tablewrap" style={{ marginTop: 6 }}>
+          <table className="small">
+            <thead>
+              <tr><th style={{ textAlign: 'left' }}>Filter</th><th>Passed: trades · avg R</th><th>Blocked: trades · avg R</th><th style={{ textAlign: 'left' }}>On for</th></tr>
+            </thead>
+            <tbody>
+              {FILTERS.map((f, i) => {
+                const o = lab.overall[i];
+                const on = Object.entries(lab.active).filter(([, ids]) => ids?.includes(f.id)).map(([k]) => STRATEGY_LABEL[k as StrategyId]);
+                return (
+                  <tr key={f.id}>
+                    <td title={f.why}>{f.label}</td>
+                    <td>{o.nPass} · {rCell(o.avgPass, o.nPass)}</td>
+                    <td>{o.nFail} · {rCell(o.avgFail, o.nFail)}</td>
+                    <td>{on.length ? <span className="up-t">{on.join(', ')}</span> : <span className="muted">learning</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="card">

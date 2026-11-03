@@ -1,8 +1,10 @@
 import type { Candle, JournalEntry, Settings, Signal } from '../src/engine/types.js';
 import { buildHtf } from '../src/engine/regime.js';
 import { buildLtf, evaluate, WARMUP } from '../src/engine/strategies.js';
-import { advanceEntry, applyExitPlan, btcFilter, exitReport, gate, isTracking, newEntry, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
+import { advanceEntry, applyExitPlan, btcFilter, clusters, exitReport, gate, isTracking, newEntry, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
 import { buildDigest, decodeLite, encodeLite, splitFinished, type Lite } from '../src/engine/archive.js';
+import { blockedBy, learnFilters, riskBlock } from '../src/engine/filters.js';
+import { coinGroup } from '../src/engine/flow.js';
 import { maintain, MAINT_EVERY_MS } from './maintain.js';
 import type { ExitPlanId, MarketCtx } from '../src/engine/types.js';
 import { PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type StrategyId } from '../src/engine/types.js';
@@ -152,6 +154,21 @@ async function scanProfile(
   const exitChoice = Object.fromEntries(Object.keys(health).map((k) => [k, exitReport(hist(), k as StrategyId, s).choice])) as Record<StrategyId, ExitPlanId>;
   const liveBefore = new Set(Object.values(health).filter((h) => PROBATION.has(h.strategy) && !h.learning).map((h) => h.strategy));
   const btcState = btcFilter(hist(), s);
+  // filter lab: which trader's filters have proven themselves for which playbook
+  const lab = learnFilters(hist(), s);
+  // account risk: today's result of the signals you were shown, and each playbook's last 10 results
+  const dayStart = Math.floor(now / 86_400_000) * 86_400_000;
+  const todayR = () => hist().filter((e) => e.status === 'ACTIVE' && !e.seed && e.outcome !== 'OPEN' && (e.resolvedAt ?? 0) >= dayStart).reduce((a, e) => a + e.rNet, 0);
+  const cooling = new Set<StrategyId>();
+  if (s.equityCurveFilter) {
+    const per = new Map<StrategyId, JournalEntry[]>();
+    for (const e of hist()) if (e.outcome !== 'OPEN' && !PROBATION.has(e.signal.strategy)) per.set(e.signal.strategy, [...(per.get(e.signal.strategy) ?? []), e]);
+    per.forEach((xs, k) => {
+      const last = clusters(xs.sort((a, b) => (a.resolvedAt ?? 0) - (b.resolvedAt ?? 0))).slice(-10);
+      const avg = last.reduce((a, c) => a + c.reduce((x, e) => x + e.rNet, 0) / c.length, 0) / Math.max(1, last.length);
+      if (last.length >= 10 && avg <= -0.5) cooling.add(k);
+    });
+  }
   // BTC on the regime timeframe, so every altcoin setup records whether it went with or against BTC
   let btcH: ReturnType<typeof buildHtf> | null = null;
   {
@@ -275,7 +292,12 @@ async function scanProfile(
       const plan = exitChoice[r.signal.strategy] ?? 'A';
       if (plan !== 'A') r.signal = applyExitPlan(r.signal, plan);
       if (openHere.some((e) => e.signal.strategy === r.signal!.strategy)) continue;
-      const g = gate(r.signal, model, health, s, btcState);
+      let g = gate(r.signal, model, health, s, btcState);
+      if (g.status === 'ACTIVE') {
+        const f = blockedBy(r.signal, lab);
+        if (f) g = { ...g, status: 'FILTERED', reason: `learned filter: ${f.label}` };
+        else if (cooling.has(r.signal.strategy)) g = { ...g, status: 'FILTERED', reason: 'cooling off: its last 10 results averaged below -0.5R' };
+      }
       r.signal.pWin = g.pWin;
       setupsAtT.push({ signal: r.signal, g, k });
     }
@@ -298,12 +320,23 @@ async function scanProfile(
       return b.signal.rr - a.signal.rr;
     });
 
+    const dayR = s.dailyLossLimitR > 0 ? todayR() : 0;
+    const groupOpen = new Map<string, number>();
+    for (const e of journal) if (e.outcome === 'OPEN' && e.status === 'ACTIVE') groupOpen.set(coinGroup(e.signal.symbol), (groupOpen.get(coinGroup(e.signal.symbol)) ?? 0) + 1);
+    let taken = 0;
     for (let idx = 0; idx < activeSetups.length; idx++) {
       const item = activeSetups[idx];
       let status = item.g.status;
-      if (idx >= availableSlots) {
+      const grp = coinGroup(item.signal.symbol);
+      const note = (why: string) => {
         status = 'FILTERED';
-        item.signal.scenario = (item.signal.scenario ? item.signal.scenario + ' · ' : '') + 'max open trades / one new trade per candle';
+        item.signal.scenario = (item.signal.scenario ? item.signal.scenario + ' · ' : '') + why;
+      };
+      const why = riskBlock(s, dayR, grp, groupOpen.get(grp) ?? 0, taken, availableSlots);
+      if (why) note(why);
+      if (status === 'ACTIVE') {
+        taken++;
+        groupOpen.set(grp, (groupOpen.get(grp) ?? 0) + 1);
       }
       journal.push(newEntry(item.signal, status, item.k.t));
       ids.add(item.signal.id);

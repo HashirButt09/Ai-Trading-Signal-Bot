@@ -163,7 +163,7 @@ yesterday's high and low.
 - **shown / silent:** closed trades, appended (the Trades tab reads them). Silent ones are stored without
   their write-up.
 - **archive:** every closed trade in a compact form, appended. Every 3 hours it is tidied (kept: every signal
-  you were shown for 60 days, the last 60 setups of every playbook, then the newest of the rest, about 850 KB),
+  you were shown for 60 days, the last 60 setups of every playbook, then the newest of the rest, about 1.5 MB),
   and the AI filter retrains on it.
 
 This keeps Upstash use to a few GB of data a month on the free plan (10 GB). The app downloads the archive

@@ -23,7 +23,7 @@ export async function maintain(kv: Kv, profile: string, s: Settings, live: Journ
     }
   }
   const kept = trimArchive(recs, now);
-  const digest = buildDigest(kept.map(liteOfRec));
+  const digest = buildDigest(kept.map((r) => liteOfRec(r, s)));
   const all = history(kept, live, s);
   const next = all.filter((e) => e.outcome !== 'OPEN').length >= s.metaMinSamples ? retrain(all, s, model) : model;
   await kv.pipe([...replaceListCmds(k.archive, kept.map((r) => JSON.stringify(r))), ['SET', k.digest, JSON.stringify(digest)], ...(next && next !== model ? [['SET', k.model, JSON.stringify(next)]] : [])]);

@@ -10,9 +10,9 @@ Learn mixed (features + learning filters) and separately (own strategies); show 
 Rules kept: never change user settings; new behaviour starts in learning mode; test + push each batch.
 
 ## Batches
-- [ ] 1. Indicators (WaveTrend/Cipher B, SMC BOS/CHoCH + FVG, XABC fib, CVD, day/week levels, volume
+- [x] 1. Indicators (WaveTrend/Cipher B, SMC BOS/CHoCH + FVG, XABC fib, CVD, day/week levels, volume
        profile, coin groups, weekday, funding window, liquidity) + strategies SMC_CHOCH_FVG, CIPHER_B, XABC_FIB
-- [ ] 2. Filter lab (learning filters per playbook) + risk rules (daily loss limit, correlation cap, equity curve)
+- [x] 2. Filter lab (learning filters per playbook) + risk rules (daily loss limit, correlation cap, equity curve)
 - [ ] 3. Entry lab (limit vs market, maker fee, missed trades) + exit plans E (time stop), F (partial + trail)
 - [ ] 4. Daily progress card + daily push, paper portfolio, I-took-it, backtest-vs-live, Monte Carlo,
        calibration, watchdog crons

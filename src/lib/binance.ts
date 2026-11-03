@@ -7,7 +7,7 @@ export const WS_BASE = 'wss://fstream.binance.com/stream?streams=';
 
 type Row = [number, string, string, string, string, string, ...unknown[]];
 
-const toCandle = (r: Row): Candle => ({ t: r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5] });
+const toCandle = (r: Row): Candle => ({ t: r[0], o: +r[1], h: +r[2], l: +r[3], c: +r[4], v: +r[5], ...(r[9] !== undefined && Number.isFinite(+(r[9] as string)) ? { tb: +(r[9] as string) } : {}) });
 
 /** Fetch up to 1500 candles. The still-forming candle is removed so only CLOSED bars are returned. */
 export async function fetchKlines(symbol: string, interval: string, limit = 500, endTime?: number): Promise<Candle[]> {
@@ -104,15 +104,25 @@ export async function fetchSinglePrice(symbol: string): Promise<number | null> {
  * interest over the last hour (one small request per pair). Best effort with a short overall time limit:
  * whatever is missing is simply unknown.
  */
-export async function fetchMarketCtx(symbols: string[], budgetMs = 8000): Promise<Record<string, { funding?: number; oiChg?: number }>> {
+export async function fetchMarketCtx(symbols: string[], budgetMs = 8000): Promise<Record<string, { funding?: number; oiChg?: number; qv24?: number }>> {
   const until = Date.now() + budgetMs;
-  const out: Record<string, { funding?: number; oiChg?: number }> = {};
+  const out: Record<string, { funding?: number; oiChg?: number; qv24?: number }> = {};
+  try {
+    // 24h traded value of every pair (one request): how liquid each coin is right now
+    const res = await fetch(`${REST_BASE}/fapi/v1/ticker/24hr`, { signal: AbortSignal.timeout(4000) });
+    if (res.ok) {
+      const want = new Set(symbols);
+      for (const r of (await res.json()) as { symbol: string; quoteVolume: string }[]) if (want.has(r.symbol) && Number.isFinite(+r.quoteVolume)) out[r.symbol] = { qv24: +r.quoteVolume };
+    }
+  } catch {
+    /* unknown liquidity */
+  }
   try {
     const res = await fetch(`${REST_BASE}/fapi/v1/premiumIndex`, { signal: AbortSignal.timeout(4000) });
     if (res.ok) {
       const rows = (await res.json()) as { symbol: string; lastFundingRate: string }[];
       const want = new Set(symbols);
-      for (const r of rows) if (want.has(r.symbol) && Number.isFinite(+r.lastFundingRate)) out[r.symbol] = { funding: +r.lastFundingRate };
+      for (const r of rows) if (want.has(r.symbol) && Number.isFinite(+r.lastFundingRate)) out[r.symbol] = { ...out[r.symbol], funding: +r.lastFundingRate };
     }
   } catch {
     /* unknown funding */

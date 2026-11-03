@@ -15,7 +15,7 @@ import { history } from '../src/engine/archive';
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log(`${c ? 'PASS' : 'FAIL'}  ${m}`); if (!c) fails++; };
 const S: Settings = { ...DEFAULT_SETTINGS, ignoreFrom: 0, ignoreTo: 0, profiles: [] };
-const NEW: StrategyId[] = ['BREAK_RETEST', 'VWAP_RECLAIM', 'ORDER_BLOCK', 'BB_SQUEEZE', 'DAY_SWEEP', 'RSI_DIVERGENCE', 'SESSION_ORB', 'DONCHIAN_BREAKOUT', 'EMA200_BOUNCE'];
+const NEW: StrategyId[] = ['BREAK_RETEST', 'VWAP_RECLAIM', 'ORDER_BLOCK', 'BB_SQUEEZE', 'DAY_SWEEP', 'RSI_DIVERGENCE', 'SESSION_ORB', 'DONCHIAN_BREAKOUT', 'EMA200_BOUNCE', 'SMC_CHOCH_FVG', 'CIPHER_B', 'XABC_FIB'];
 
 // ---------- synthetic market ----------
 let seed = 21;
@@ -63,7 +63,7 @@ function synth(n: number, p0: number) {
     const cut = buildLtf(mk.m5.slice(0, i + 1)); // nothing after the trigger candle exists
     const a = evaluate('XUSDT', L, i, H, only).signal!;
     const b = evaluate('XUSDT', cut, i, H, only).signal;
-    if (b && b.id === a.id && b.entry === a.entry && b.sl === a.sl && b.tp === a.tp && JSON.stringify(b.plans) === JSON.stringify(a.plans)) same++;
+    if (b && b.id === a.id && b.entry === a.entry && b.sl === a.sl && b.tp === a.tp && JSON.stringify(b.plans) === JSON.stringify(a.plans) && JSON.stringify(b.features) === JSON.stringify(a.features)) same++;
   }
   ok(checks.length > 10 && same === checks.length, `new playbooks and their exit plans use only closed candles: identical without future data (${same}/${checks.length}, every playbook checked)`);
   // the funding playbook needs live funding / open interest
@@ -120,9 +120,12 @@ function tr(strategy: StrategyId, rNet: number, t: number, btcAlign = 0, vol = 1
   const old = trainMeta(Array.from({ length: 50 }, (_, i) => ({ x: featurize(tr('TREND_FVG_RETEST', 1, T0 + i).signal).slice(0, 20), y: (i % 2) as 0 | 1 })))!;
   const p = predictMeta(old, tr('BB_SQUEEZE', 0, T0, -1).signal);
   ok(old.w.length === 20 && Number.isFinite(p) && p > 0 && p < 1, 'a model trained before the new features still predicts (they are appended, never inserted)');
+  const g0 = () => tr('TREND_FVG_RETEST', 0, T0, 1).signal;
   const f = featurize(tr('TREND_FVG_RETEST', 0, T0, 1).signal);
   const g = featurize(tr('TREND_FVG_RETEST', 0, T0, 1).signal);
-  ok(f.slice(0, 25).join() === g.slice(0, 25).join() && f.length === 36, `existing feature positions are unchanged, new ones appended (${f.length} features)`);
+  ok(f.slice(0, 25).join() === g.slice(0, 25).join() && f.length === 68, `existing feature positions are unchanged, new ones appended (${f.length} features)`);
+  const withExtra = { ...g0(), features: { ...g0().features, extra: Array.from({ length: 29 }, (_, j) => j / 10) } };
+  ok(featurize(withExtra).slice(0, 39).join() === featurize(g0()).slice(0, 39).join() && featurize(withExtra)[39 + 5] === 0.5, 'your scripts\' readings and the other context only add features at the very end');
   const early = tr('TREND_FVG_RETEST', 0, T0, 1).signal;
   const withCtx = { ...early, features: { ...early.features, funding: 9, oiChg: 3, btcVol: 1.2, pdhDist: 2, pdlDist: 5 } };
   ok(featurize(withCtx).slice(0, 25).join() === featurize(early).slice(0, 25).join(), 'market context only adds features at the end');

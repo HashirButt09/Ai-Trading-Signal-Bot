@@ -27,6 +27,8 @@ export interface ScenarioInput {
   rangeHigh?: number;
   rangeLow?: number;
   level?: number; // key level of the newer playbooks
+  cipherDiv?: boolean;
+  xabc?: { x: number; a: number; b: number; c: number; bLevel: number };
 }
 
 /**
@@ -64,6 +66,31 @@ export function buildScenario(s: ScenarioInput): string {
         `The ${s.htf} regime is ${dir} (ADX ${s.adx.toFixed(0)}). On the ${s.ltf} chart a strong ${dir} candle broke the recent ${long ? 'high' : 'low'}; ` +
         `the last ${long ? 'red' : 'green'} candle before it is the order block${z}, where larger orders were likely placed. ` +
         `Price has returned to it for the first time and closed back ${long ? 'above' : 'below'} it on ${vol}, so the block is being defended.` +
+        tail + learning
+      );
+    }
+    case 'SMC_CHOCH_FVG': {
+      const z = s.zone ? ` (${fmt(s.zone.bottom)} - ${fmt(s.zone.top)})` : '';
+      const rg = s.rangeHigh !== undefined && s.rangeLow !== undefined ? ` between ${fmt(s.rangeLow)} and ${fmt(s.rangeHigh)}` : '';
+      return (
+        `Smart-money structure: price broke the last ${long ? 'lower high' : 'higher low'} with a candle close, a change of character (CHoCH) to ${long ? 'bullish' : 'bearish'}. ` +
+        `In the new structure${rg}, price pulled back into an unfilled Fair Value Gap${z} in the ${long ? 'discount (lower half)' : 'premium (upper half)'} and closed back ${long ? 'above' : 'below'} it on ${vol}. ` +
+        `That is the classic SMC entry: new structure, then the first return to its imbalance.` +
+        tail + learning
+      );
+    }
+    case 'CIPHER_B':
+      return (
+        `VuManChu Cipher B: the WaveTrend waves crossed ${long ? 'up from oversold (green dot)' : 'down from overbought (red dot)'}` +
+        `${s.cipherDiv ? `, after a ${long ? 'bullish' : 'bearish'} WaveTrend divergence` : `, with the RSI+MFI money-flow area turning ${long ? 'up' : 'down'}`}. ` +
+        `The trigger candle closed ${long ? 'up' : 'down'} on ${vol}. The ${s.htf} regime is ${s.regime === 'RANGE' ? 'sideways' : dir}, so the trade is not against the bigger trend.` +
+        tail + learning
+      );
+    case 'XABC_FIB': {
+      const x = s.xabc;
+      return (
+        `Trend Fibonacci (XABC): price moved from X ${x ? fmt(x.x) : ''} to A ${x ? fmt(x.a) : ''}, then retraced to B, the ${x ? x.bLevel : ''} level (${x ? fmt(x.b) : lv}), and was rejected there with a ${long ? 'bullish' : 'bearish'} close on ${vol}. ` +
+        `The XABC target C is ${x ? fmt(x.c) : '-'} (B minus the X-A move). The stop sits beyond the next Fibonacci level.` +
         tail + learning
       );
     }

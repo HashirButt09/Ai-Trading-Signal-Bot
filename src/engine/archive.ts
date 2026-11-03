@@ -7,17 +7,43 @@
  * the last 60 setups of every playbook (so learning-mode playbooks never lose their record), then the
  * newest of everything else until the size budget is used.
  */
-import { ALL_STRATEGIES, EXIT_PLANS, type JournalEntry, type Outcome, type Regime, type Settings, type StrategyId } from './types.js';
+import { ALL_STRATEGIES, EXIT_PLANS, EXTRA_KEYS, type JournalEntry, type Outcome, type Regime, type Settings, type StrategyId } from './types.js';
+import { calendar, COIN_GROUPS } from './flow.js';
+import { filterBits } from './filters.js';
+import { TF_MS } from './time.js';
 import { isTracking } from './journal.js';
 
 const REGIMES: Regime[] = ['TREND_BULL', 'TREND_BEAR', 'RANGE', 'CHOP'];
 const STATUS = ['ACTIVE', 'FILTERED', 'PAUSED'] as const;
 const OUTCOMES: Outcome[] = ['WIN', 'LOSS', 'EXPIRED', 'OPEN'];
-export const ARCHIVE_BYTES = 850_000; // one Redis value, well under Upstash's request size limit
+export const ARCHIVE_BYTES = 1_500_000; // about 7,000 closed trades per bot; well under Upstash's 10 MB request limit
 const DAY = 86_400_000;
 
-/** [t, resolvedAt-t, strategy, side, status, outcome, rNet, pWin, symbol, regime, slPct, rr, atrPct, adx, vol, hour, trend, btc, funding, oi, btcVol, pdh, pdl, patterns, exits, seed] */
+/** [t, resolvedAt-t, strategy, side, status, outcome, rNet, pWin, symbol, regime, slPct, rr, atrPct, adx, vol, hour, trend, btc, funding, oi, btcVol, pdh, pdl, patterns, exits, seed, extra] */
 export type Rec = (number | string | null | number[])[];
+
+/**
+ * The context readings are stored compactly: the 16 chart / flow / level readings with 2 decimals, the
+ * coin group as one number and liquidity. The calendar readings are rebuilt from the trade's time.
+ */
+const N_READINGS = 16;
+const G0 = EXTRA_KEYS.indexOf('g_major');
+const W0 = EXTRA_KEYS.indexOf('weekend');
+const LIQ = EXTRA_KEYS.indexOf('liq');
+function packExtra(x: number[]): number[] {
+  const r2 = (v: number) => Math.round((Number.isFinite(v) ? v : 0) * 100) / 100;
+  const g = COIN_GROUPS.findIndex((_, j) => x[G0 + j] === 1);
+  return [...x.slice(0, N_READINGS).map(r2), g < 0 ? COIN_GROUPS.length - 1 : g, r2(x[LIQ])];
+}
+function unpackExtra(p: number[], closeTime: number): number[] {
+  const out = new Array<number>(EXTRA_KEYS.length).fill(0);
+  for (let j = 0; j < N_READINGS; j++) out[j] = p[j] ?? 0;
+  out[G0 + (p[N_READINGS] ?? COIN_GROUPS.length - 1)] = 1;
+  const cal = calendar(closeTime);
+  [cal.weekend, cal.dowSin, cal.dowCos, cal.monthEnd, cal.fundingSoon].forEach((v, j) => (out[W0 + j] = +v.toFixed(3)));
+  out[LIQ] = p[N_READINGS + 1] ?? 0;
+  return out;
+}
 
 const r3 = (x: number | undefined | null) => (x === undefined || x === null || !Number.isFinite(x) ? null : Math.round(x * 1000) / 1000);
 
@@ -50,7 +76,8 @@ export function encode(e: JournalEntry): Rec {
     r3(f.pdlDist),
     (s.patterns ?? []).join(','),
     e.exits ? EXIT_PLANS.map((p) => r3(e.exits![p]?.rNet ?? 0) ?? 0) : null,
-    e.seed ? 1 : 0
+    e.seed ? 1 : 0,
+    f.extra ? packExtra(f.extra) : null
   ];
 }
 
@@ -99,7 +126,8 @@ export function decode(r: Rec, s: Pick<Settings, 'ltf' | 'htf'>): JournalEntry {
         oiChg: num(r[19]),
         btcVol: num(r[20]),
         pdhDist: num(r[21]),
-        pdlDist: num(r[22])
+        pdlDist: num(r[22]),
+        ...(Array.isArray(r[26]) ? { extra: unpackExtra(r[26] as number[], t + (TF_MS[s.ltf] ?? 300_000)) } : {})
       }
     },
     status: STATUS[r[4] as number] ?? 'PAUSED',
@@ -163,7 +191,7 @@ export function splitFinished(journal: JournalEntry[]): { tracking: JournalEntry
 /**
  * Learning digest: the few numbers playbook health, the exit lab and the BTC filter need, for the most
  * recent trades of every playbook. Small enough to read on every scan.
- *   [t, resolvedAt - t, strategy, side, status, rNet, btcAlign, exits]
+ *   [t, resolvedAt - t, strategy, side, status, rNet, btcAlign, exits, filter bits]
  */
 export type Lite = (number | null | number[])[];
 export const DIGEST_PER_PLAYBOOK = 80;
@@ -178,10 +206,17 @@ export function encodeLite(e: JournalEntry): Lite {
     STATUS.indexOf(e.status as (typeof STATUS)[number]),
     r3(e.rNet),
     e.signal.features?.btcAlign ?? null,
-    e.exits ? EXIT_PLANS.map((p) => r3(e.exits![p]?.rNet ?? 0) ?? 0) : null
+    e.exits ? EXIT_PLANS.map((p) => r3(e.exits![p]?.rNet ?? 0) ?? 0) : null,
+    (() => {
+      const b = e.filterBits ?? (e.signal.features ? filterBits(e.signal) : null);
+      return b ? [b.pass, b.known] : null;
+    })()
   ];
 }
-export const liteOfRec = (r: Rec): Lite => [r[0] as number, r[1] as number, r[2] as number, r[3] as number, r[4] as number, r[6] as number, (r[17] as number | null) ?? null, (r[24] as number[] | null) ?? null];
+export function liteOfRec(r: Rec, s: Pick<Settings, 'ltf' | 'htf'>): Lite {
+  const b = filterBits(decode(r, s).signal);
+  return [r[0] as number, r[1] as number, r[2] as number, r[3] as number, r[4] as number, r[6] as number, (r[17] as number | null) ?? null, (r[24] as number[] | null) ?? null, [b.pass, b.known]];
+}
 
 export function decodeLite(r: Lite, s: Pick<Settings, 'ltf' | 'htf'>): JournalEntry {
   const t = r[0] as number;
@@ -206,6 +241,7 @@ export function decodeLite(r: Lite, s: Pick<Settings, 'ltf' | 'htf'>): JournalEn
     resolvedAt: t + ((r[1] as number) ?? 0),
     barsOpen: 0,
     ...(ex ? { exits: Object.fromEntries(EXIT_PLANS.map((p, i) => [p, { outcome: (ex[i] > 0 ? 'WIN' : 'LOSS') as Outcome, rNet: ex[i] }])) } : {}),
+    ...(Array.isArray(r[8]) ? { filterBits: { pass: (r[8] as number[])[0], known: (r[8] as number[])[1] } } : {}),
     archived: true
   };
 }

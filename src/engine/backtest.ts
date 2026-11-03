@@ -30,10 +30,16 @@ export interface BacktestResult {
 }
 
 /** Walk every closed LTF candle in order, one position per symbol at a time. */
+// indicator contexts depend only on the candles, so testing many setting ideas on the same history reuses them
+const ltfMemo = new WeakMap<Candle[], ReturnType<typeof buildLtf>>();
+const htfMemo = new WeakMap<Candle[], ReturnType<typeof buildHtf>>();
+const ltfOf = (c: Candle[]) => ltfMemo.get(c) ?? (ltfMemo.set(c, buildLtf(c)), ltfMemo.get(c)!);
+const htfOf = (c: Candle[]) => htfMemo.get(c) ?? (htfMemo.set(c, buildHtf(c)), htfMemo.get(c)!);
+
 export function runBacktest(symbol: string, ltfCandles: Candle[], htfCandles: Candle[], s: Settings, btcHtf?: Candle[] | null): BacktestResult {
-  const L = buildLtf(ltfCandles);
-  const H = buildHtf(htfCandles);
-  const B = btcHtf && btcHtf.length > 60 ? (symbol.startsWith('BTC') ? H : buildHtf(btcHtf)) : null;
+  const L = ltfOf(ltfCandles);
+  const H = htfOf(htfCandles);
+  const B = btcHtf && btcHtf.length > 60 ? (symbol.startsWith('BTC') ? H : htfOf(btcHtf)) : null;
   const trades: BtTrade[] = [];
   let busyUntil = -1;
   let cooldownUntil = -1;
