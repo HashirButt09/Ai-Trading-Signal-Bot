@@ -427,6 +427,42 @@ export const LIBRARY: Entry[] = [
     related: ['liquidity_sweep', 'range', 'rectangle']
   },
   {
+    id: 'BREAK_RETEST', cat: 'bot', title: 'Playbook: Break & Retest (learning mode)',
+    summary: 'A level that held price for a while breaks with volume; price comes back to it and it holds from the other side.',
+    identify: 'The highest high (or lowest low) of roughly the last 70 candles, ignoring the last 12. A candle closes beyond it on at least 1.2x average volume, price moves at least half an ATR away without closing back through, then returns to within 0.3 ATR of the level and closes away from it in the breakout direction.',
+    meaning: 'Traders who missed the breakout and those who were stopped out both act at the old level, so old resistance becomes support (or the reverse).',
+    trade: 'Entry at the close of the reaction candle, stop 0.3 ATR beyond the level or the candle extreme, target your trend R multiple. Not taken against the higher-timeframe trend.',
+    pitfalls: 'A deep return that closes back through the level is a failed breakout, not a retest. New: tracked silently until it proves itself on your own trades.',
+    related: ['break_retest', 'support_resistance', 'volume']
+  },
+  {
+    id: 'VWAP_RECLAIM', cat: 'bot', title: 'Playbook: VWAP Reclaim / Reject (learning mode)',
+    summary: 'Price spends a while on the wrong side of today\u2019s VWAP, then closes back over it with volume (or loses it again).',
+    identify: 'At least 3 of the last 4 candles closed below the daily VWAP (above it for shorts), at least an hour into the UTC day; the trigger candle closes 0.1 ATR beyond VWAP in the trade direction on at least 1.2x average volume.',
+    meaning: 'VWAP is the average price everyone paid today. Getting back above it puts the average buyer back in profit, which tends to bring more buying.',
+    trade: 'Entry at the close, stop beyond the extreme of the last 4 candles plus 0.2 ATR, target your trend R multiple. Not taken against the higher-timeframe trend.',
+    pitfalls: 'In a strong trend price can cross VWAP many times in a row without follow-through. New: tracked silently until it proves itself.',
+    related: ['vwap', 'volume', 'sessions']
+  },
+  {
+    id: 'ORDER_BLOCK', cat: 'bot', title: 'Playbook: Order Block Retest (learning mode)',
+    summary: 'In a trend, the last opposite candle before a strong move that broke structure is retested for the first time.',
+    identify: 'Higher timeframe trending. A candle with a body of at least 1.5 ATR closes beyond the extreme of the 10 candles before it; the last opposite-coloured candle just before it is the order block. Price returns into the block for the first time and closes back out in the trend direction.',
+    meaning: 'The block is where larger orders were placed before the move; on the first return, unfilled orders there often defend it.',
+    trade: 'Entry at the reaction close, stop 0.2 ATR beyond the far side of the block, target your trend R multiple.',
+    pitfalls: 'Only the first return counts; a block that has been traded through is spent. New: tracked silently until it proves itself.',
+    related: ['order_block', 'bos_choch', 'trend_structure']
+  },
+  {
+    id: 'BB_SQUEEZE', cat: 'bot', title: 'Playbook: Bollinger Squeeze Breakout (learning mode)',
+    summary: 'The bands are the narrowest in 100 candles, then a strong candle closes outside them with volume.',
+    identify: 'Band width (4 standard deviations divided by the 20 SMA) on the previous candle within 10% of its 100-candle low. The trigger candle has a body of at least 60% of its range, volume at least 1.5x average, and closes beyond the band.',
+    meaning: 'Quiet markets do not stay quiet: very low volatility is usually followed by a strong move, and the first strong close outside the band shows its direction.',
+    trade: 'Entry at the close, stop just beyond the middle band (20 SMA) or the candle extreme, target your trend R multiple. Not taken against the higher-timeframe trend.',
+    pitfalls: 'The first break is sometimes a fake-out that snaps back inside the bands. New: tracked silently until it proves itself.',
+    related: ['bollinger', 'atr', 'volume']
+  },
+  {
     id: 'meta_filter', cat: 'bot', title: 'The learned AI filter',
     summary: 'A small model trained on your last 30 days of resolved trades that estimates each new setup’s chance of winning.',
     identify: 'It uses volatility, ADX, volume, reward-to-risk, stop size, hour, playbook and direction. Setups below the threshold are hidden from you but still tracked so it keeps learning.',

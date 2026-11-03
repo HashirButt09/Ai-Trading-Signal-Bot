@@ -19,7 +19,11 @@ export type StrategyId =
   | 'CHART_TRIANGLE'
   | 'CHART_WEDGE'
   | 'CHART_FLAG'
-  | 'CHART_CUP_HANDLE';
+  | 'CHART_CUP_HANDLE'
+  | 'BREAK_RETEST'
+  | 'VWAP_RECLAIM'
+  | 'ORDER_BLOCK'
+  | 'BB_SQUEEZE';
 
 export const STRATEGY_LABEL: Record<StrategyId, string> = {
   TREND_FVG_RETEST: 'Trend FVG Retest',
@@ -31,9 +35,21 @@ export const STRATEGY_LABEL: Record<StrategyId, string> = {
   CHART_TRIANGLE: 'Triangle Breakout',
   CHART_WEDGE: 'Wedge Breakout',
   CHART_FLAG: 'Flag Breakout',
-  CHART_CUP_HANDLE: 'Cup & Handle'
+  CHART_CUP_HANDLE: 'Cup & Handle',
+  BREAK_RETEST: 'Break & Retest',
+  VWAP_RECLAIM: 'VWAP Reclaim / Reject',
+  ORDER_BLOCK: 'Order Block Retest',
+  BB_SQUEEZE: 'Bollinger Squeeze Breakout'
 };
 export const ALL_STRATEGIES = Object.keys(STRATEGY_LABEL) as StrategyId[];
+
+/**
+ * Strategies on probation ("learning mode"): every setup is tracked silently and learned from, and a
+ * strategy only sends you signals while its own results have proven it (see journal.ts playbookHealth).
+ */
+export const PROBATION: ReadonlySet<StrategyId> = new Set<StrategyId>(['BREAK_RETEST', 'VWAP_RECLAIM', 'ORDER_BLOCK', 'BB_SQUEEZE']);
+/** trades a learning strategy needs before it can go live */
+export const PROMOTE_MIN_TRADES = 40;
 
 export interface Features {
   atrPct: number; // ATR / price (fraction)
@@ -43,6 +59,7 @@ export interface Features {
   slPct: number; // stop distance (fraction)
   hour: number; // UTC hour 0-23
   trendAligned: number; // 1 if with HTF trend, 0 if range/counter
+  btcAlign?: number; // +1 trade agrees with BTC's regime trend, -1 against it, 0 BTC ranging / unknown / BTC itself
 }
 
 /** Rule thresholds the AI agent may tune (inside hard bounds). Defaults = the original fixed rules. */
@@ -197,7 +214,11 @@ export const DEFAULT_SETTINGS: Settings = {
     CHART_TRIANGLE: true,
     CHART_WEDGE: true,
     CHART_FLAG: true,
-    CHART_CUP_HANDLE: true
+    CHART_CUP_HANDLE: true,
+    BREAK_RETEST: true,
+    VWAP_RECLAIM: true,
+    ORDER_BLOCK: true,
+    BB_SQUEEZE: true
   },
   metaThreshold: 0.5,
   metaMinSamples: 40,

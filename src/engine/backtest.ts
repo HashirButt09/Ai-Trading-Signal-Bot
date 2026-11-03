@@ -30,16 +30,17 @@ export interface BacktestResult {
 }
 
 /** Walk every closed LTF candle in order, one position per symbol at a time. */
-export function runBacktest(symbol: string, ltfCandles: Candle[], htfCandles: Candle[], s: Settings): BacktestResult {
+export function runBacktest(symbol: string, ltfCandles: Candle[], htfCandles: Candle[], s: Settings, btcHtf?: Candle[] | null): BacktestResult {
   const L = buildLtf(ltfCandles);
   const H = buildHtf(htfCandles);
+  const B = btcHtf && btcHtf.length > 60 ? (symbol.startsWith('BTC') ? H : buildHtf(btcHtf)) : null;
   const trades: BtTrade[] = [];
   let busyUntil = -1;
   let cooldownUntil = -1;
 
   for (let i = WARMUP; i < ltfCandles.length - 1; i++) {
     if (i <= busyUntil || i <= cooldownUntil) continue;
-    const r = evaluate(symbol, L, i, H, s);
+    const r = evaluate(symbol, L, i, H, s, B);
     if (!r.signal) continue;
 
     let e: JournalEntry = { signal: r.signal, status: 'ACTIVE', outcome: 'OPEN', rNet: 0, barsOpen: 0 };

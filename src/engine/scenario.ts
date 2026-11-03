@@ -26,6 +26,7 @@ export interface ScenarioInput {
   swept?: number; // swept liquidity level
   rangeHigh?: number;
   rangeLow?: number;
+  level?: number; // key level of the newer playbooks
 }
 
 /**
@@ -41,7 +42,38 @@ export function buildScenario(s: ScenarioInput): string {
     `(${s.rr.toFixed(2)}R). Leverage ${s.leverage}x keeps the estimated loss at the stop inside your cap, ` +
     `and the stop sits well inside the liquidation price. If price closes beyond the stop, the idea is invalid - exit.`;
 
+  const lv = s.level !== undefined ? fmt(s.level) : '';
+  const learning = ' This playbook is in learning mode: it is tracked silently until its own results prove it.';
   switch (s.strategy) {
+    case 'BREAK_RETEST':
+      return (
+        `The ${s.htf} regime is ${s.regime === 'RANGE' ? 'sideways' : dir} (ADX ${s.adx.toFixed(0)}). On the ${s.ltf} chart price broke ${long ? 'above' : 'below'} ${lv}, ` +
+        `a level that had ${long ? 'capped' : 'held'} price for a while, on above-average volume, moved away, and has now come back to test it. ` +
+        `The trigger candle ${long ? 'held above' : 'stayed below'} it and closed ${long ? 'up' : 'down'} on ${vol}: old ${long ? 'resistance acting as support' : 'support acting as resistance'}.` +
+        tail + learning
+      );
+    case 'VWAP_RECLAIM':
+      return (
+        `The ${s.htf} regime is ${s.regime === 'RANGE' ? 'sideways' : dir} (ADX ${s.adx.toFixed(0)}). On the ${s.ltf} chart price had spent several candles ${long ? 'below' : 'above'} today's VWAP (${lv}), ` +
+        `then the trigger candle closed back ${long ? 'above' : 'below'} it on ${vol}. Today's average buyer is ${long ? 'back in profit, which tends to attract buying' : 'now under water, which tends to attract selling'}.` +
+        tail + learning
+      );
+    case 'ORDER_BLOCK': {
+      const z = s.zone ? ` (${fmt(s.zone.bottom)} - ${fmt(s.zone.top)})` : '';
+      return (
+        `The ${s.htf} regime is ${dir} (ADX ${s.adx.toFixed(0)}). On the ${s.ltf} chart a strong ${dir} candle broke the recent ${long ? 'high' : 'low'}; ` +
+        `the last ${long ? 'red' : 'green'} candle before it is the order block${z}, where larger orders were likely placed. ` +
+        `Price has returned to it for the first time and closed back ${long ? 'above' : 'below'} it on ${vol}, so the block is being defended.` +
+        tail + learning
+      );
+    }
+    case 'BB_SQUEEZE':
+      return (
+        `The ${s.htf} regime is ${s.regime === 'RANGE' ? 'sideways' : dir} (ADX ${s.adx.toFixed(0)}). On the ${s.ltf} chart the Bollinger Bands had squeezed to their narrowest in 100 candles, ` +
+        `a sign that volatility is about to expand. The trigger candle closed ${long ? 'above the upper' : 'below the lower'} band (${lv}) with a strong body on ${vol}, ` +
+        `so the expansion is starting ${long ? 'upward' : 'downward'}.` +
+        tail + learning
+      );
     case 'TREND_FVG_RETEST': {
       const z = s.zone ? ` between ${fmt(s.zone.bottom)} and ${fmt(s.zone.top)}` : '';
       return (

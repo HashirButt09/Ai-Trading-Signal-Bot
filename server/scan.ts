@@ -1,7 +1,8 @@
 import type { Candle, JournalEntry, Settings, Signal } from '../src/engine/types.js';
 import { buildHtf } from '../src/engine/regime.js';
 import { buildLtf, evaluate, WARMUP } from '../src/engine/strategies.js';
-import { advanceEntry, gate, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
+import { advanceEntry, btcFilter, gate, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
+import { PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type StrategyId } from '../src/engine/types.js';
 import { TF_MS } from '../src/engine/time.js';
 import { playName } from '../src/engine/names.js';
 import type { Kv } from './kv.js';
@@ -87,6 +88,7 @@ interface ProfileResult {
   retrained: boolean;
   prunedSymbols: string[];
   errorCount: number;
+  promoted: StrategyId[]; // learning-mode playbooks that just proved themselves
 }
 
 /** scan one timeframe profile: its own journal, model, health and cursors; pushes fresh signals into `fresh` */
@@ -110,7 +112,7 @@ async function scanProfile(
   const step = TF_MS[s.ltf];
   const due = dueSymbols(s, cursor, now);
 
-  // fetch candles (4 pairs at a time to stay gentle on Binance)
+  // fetch candles (6 pairs at a time: fast, and well inside Binance's request limits)
   const data = new Map<string, { L: Candle[]; H: Candle[] }>();
   const queue = [...due];
   const invalidSymbols: string[] = [];
@@ -130,10 +132,18 @@ async function scanProfile(
       }
     }
   };
-  await Promise.all([worker(), worker(), worker(), worker()]);
+  await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);
 
 
   let health = playbookHealth(journal, s);
+  const liveBefore = new Set(Object.values(health).filter((h) => PROBATION.has(h.strategy) && !h.learning).map((h) => h.strategy));
+  const btcState = btcFilter(journal, s);
+  // BTC on the regime timeframe, so every altcoin setup records whether it went with or against BTC
+  let btcH: ReturnType<typeof buildHtf> | null = null;
+  {
+    const b = data.get('BTCUSDT')?.H ?? (await d.klines('BTCUSDT', s.htf, HTF_LIMIT).catch(() => null));
+    if (b && b.length > 60) btcH = buildHtf(b);
+  }
   const ids = new Set(journal.map((e) => e.signal.id));
 
   interface SymCtx {
@@ -238,12 +248,16 @@ async function scanProfile(
       }
 
       if (i < WARMUP) continue;
-      // one position per pair at a time (any status, ACTIVE or FILTERED on the same coin)
-      if (journal.some((e) => e.signal.symbol === sym && e.outcome === 'OPEN' && e.signal.ltf === s.ltf)) continue;
+      // one position per pair at a time (any status, ACTIVE or FILTERED on the same coin); a learning-mode
+      // trade only blocks its own playbook, so tracking it never costs you a real signal
+      const openHere = journal.filter((e) => e.signal.symbol === sym && e.outcome === 'OPEN' && e.signal.ltf === s.ltf);
+      const blocking = openHere.filter((e) => !(e.status === 'PAUSED' && PROBATION.has(e.signal.strategy)));
+      if (blocking.length) continue;
 
-      const r = evaluate(sym, item.lctx, i, item.hctx, s);
+      const r = evaluate(sym, item.lctx, i, item.hctx, s, btcH);
       if (!r.signal || ids.has(r.signal.id)) continue;
-      const g = gate(r.signal, model, health, s);
+      if (openHere.some((e) => e.signal.strategy === r.signal!.strategy)) continue;
+      const g = gate(r.signal, model, health, s, btcState);
       r.signal.pWin = g.pWin;
       setupsAtT.push({ signal: r.signal, g, k });
     }
@@ -300,7 +314,8 @@ async function scanProfile(
     }
   }
 
-  return { journal, model, cursor, ...out, prunedSymbols: invalidSymbols, errorCount: Object.keys(errors).length - errsBefore };
+  const promoted = Object.values(health).filter((h) => PROBATION.has(h.strategy) && !h.learning && !liveBefore.has(h.strategy)).map((h) => h.strategy);
+  return { journal, model, cursor, ...out, prunedSymbols: invalidSymbols, errorCount: Object.keys(errors).length - errsBefore, promoted };
 }
 
 export async function runScan(d: ScanDeps): Promise<ScanReport> {
@@ -340,6 +355,7 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
   const lock = await acquireLock(d.kv);
   if (!lock) return { ...report, skipped: 'locked' };
   const fresh: Signal[] = [];
+  const promotions: { bot: string; strategy: StrategyId }[] = [];
   let st: ServerStatus;
   let settings: Settings;
   try {
@@ -348,6 +364,7 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
     st = shared.status;
     let changed = false;
     const profStatus: Record<string, ProfileStatus> = { ...(st.profiles ?? {}) };
+    promotions.length = 0;
     for (const prof of profileList(settings)) {
       // the main bot always runs; an extra bot waits for the next minute if this run is already long
       if (prof.id !== MAIN && Date.now() - started > EXTRA_PROFILE_BUDGET_MS) {
@@ -362,6 +379,7 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
       }
       await d.kv.pipe(saveCmds({ journal: r.journal, model: r.retrained ? r.model : undefined, cursor: r.cursor, profile: prof.id }));
       if (r.newSignals.length || r.resolvedNow || r.retrained) changed = true;
+      for (const k of r.promoted) promotions.push({ bot: prof.label, strategy: k });
       report.profiles![prof.id] = { processed: r.processed, newSignals: r.newSignals, resolvedNow: r.resolvedNow, retrained: r.retrained };
       if (prof.id === MAIN) {
         report.processed = r.processed;
@@ -385,6 +403,18 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
     await d.kv.pipe(saveCmds({ status: st }));
   } finally {
     await releaseLock(d.kv, lock);
+  }
+
+  // a learning-mode playbook just earned live signals: tell every device once
+  if (promotions.length) {
+    const subs = await listSubs(d.kv);
+    await Promise.all(
+      [...subs.values()].flatMap((rec) =>
+        promotions.map((p) =>
+          d.send(rec.sub, { title: `New strategy live (${p.bot})`, body: `${STRATEGY_LABEL[p.strategy]} proved itself over ${PROMOTE_MIN_TRADES}+ tracked trades and now sends signals. It goes back to learning mode if its results fade.`, tag: `promo-${p.strategy}`, url: '/?tab=agent' }).catch(() => 'x')
+        )
+      )
+    );
   }
 
   // notifications (after saving, so a slow push service can't lose the scan)

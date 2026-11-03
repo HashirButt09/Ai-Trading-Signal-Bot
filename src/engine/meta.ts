@@ -44,8 +44,11 @@ export interface GateReport {
 
 import { ALL_STRATEGIES } from './types.js';
 import { PATTERN_INFO } from './patterns.js';
-// new playbooks are appended at the end, so models trained before they existed stay valid
-const STRATS: StrategyId[] = ALL_STRATEGIES;
+// Feature order never changes for existing inputs: the first 10 playbooks, then the candle read, then
+// everything added later. Models trained before a feature existed simply ignore it.
+const LEGACY = 10;
+const STRATS: StrategyId[] = ALL_STRATEGIES.slice(0, LEGACY);
+const LATER: StrategyId[] = ALL_STRATEGIES.slice(LEGACY);
 
 export function featurize(s: Signal): number[] {
   const f = s.features;
@@ -61,8 +64,11 @@ export function featurize(s: Signal): number[] {
     f.trendAligned,
     s.side === 'LONG' ? 1 : 0,
     ...STRATS.map((k) => (s.strategy === k ? 1 : 0)),
-    // candlestick read at the trigger: +1 agrees with the trade, -1 against, 0 none (appended last)
-    candleAgree(s)
+    // candlestick read at the trigger: +1 agrees with the trade, -1 against, 0 none
+    candleAgree(s),
+    // added later (appended so older models stay valid)
+    ...LATER.map((k) => (s.strategy === k ? 1 : 0)),
+    f.btcAlign ?? 0
   ];
 }
 

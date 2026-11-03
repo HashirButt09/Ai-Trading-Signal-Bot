@@ -297,7 +297,7 @@ export class Scanner {
       const lastCandle = L[L.length - 1];
       let isActive = false;
       if (H?.length) {
-        const r = evaluate(sym, buildLtf(L), L.length - 1, buildHtf(H), this.settings);
+        const r = evaluate(sym, buildLtf(L), L.length - 1, buildHtf(H), this.settings, this.btcCtx());
         if (r.signal && !this.journal.some((e) => e.signal.id === r.signal!.id)) {
           const g = gate(r.signal, this.model, this.health, this.settings);
           r.signal.pWin = g.pWin;
@@ -559,7 +559,7 @@ export class Scanner {
     if (!L || !H) return;
     const hasOpen = this.journal.some((e) => e.signal.symbol === symbol && e.outcome === 'OPEN' && e.signal.ltf === s.ltf);
     const lctx = buildLtf(L);
-    const r = evaluate(symbol, lctx, L.length - 1, buildHtf(H), s);
+    const r = evaluate(symbol, lctx, L.length - 1, buildHtf(H), s, this.btcCtx());
     const stt = this.state.get(symbol);
     if (stt) stt.note = r.note;
     if (!r.signal || hasOpen) {
@@ -592,6 +592,12 @@ export class Scanner {
     this.journal.push(entry);
     this.persist();
     if (status === 'ACTIVE') void alertSignal(r.signal, s);
+  }
+
+  /** BTC on the regime timeframe (for the with/against BTC learning feature) */
+  private btcCtx() {
+    const b = this.htf.get('BTCUSDT');
+    return b && b.length > 60 ? buildHtf(b) : null;
   }
 
   retrainNow() {

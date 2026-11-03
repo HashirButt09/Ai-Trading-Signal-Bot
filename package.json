@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && tsc -p tsconfig.server.json && vite build",
     "preview": "vite preview",
-    "test": "tsx scripts/test-engine.ts && tsx scripts/test-scanner.ts && tsx scripts/test-review.ts && tsx scripts/test-api.ts && tsx scripts/test-server.ts && tsx scripts/test-agent.ts && tsx scripts/test-trades.ts && tsx scripts/test-indicators.ts && tsx scripts/test-patterns.ts && tsx scripts/test-learner.ts && tsx scripts/test-progress.ts && tsx scripts/test-clusters.ts && tsx scripts/test-profiles.ts",
+    "test": "tsx scripts/test-engine.ts && tsx scripts/test-scanner.ts && tsx scripts/test-review.ts && tsx scripts/test-api.ts && tsx scripts/test-server.ts && tsx scripts/test-agent.ts && tsx scripts/test-trades.ts && tsx scripts/test-indicators.ts && tsx scripts/test-patterns.ts && tsx scripts/test-learner.ts && tsx scripts/test-progress.ts && tsx scripts/test-clusters.ts && tsx scripts/test-profiles.ts && tsx scripts/test-learning.ts",
     "keys": "node scripts/keys.mjs",
     "check:indicators": "tsx scripts/ref/dump-indicators.ts ind.json && python3 scripts/ref/check_indicators.py ind.json"
   },

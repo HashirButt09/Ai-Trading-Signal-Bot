@@ -125,6 +125,19 @@ playbooks and your minimum win chance are shared.
 - **Correlated signals:** when many coins trigger the same side on the same candle, that is one market move.
   The AI filter, its learning-style scores and playbook auto-pause count such a group as one trade.
 
+## Learning-mode strategies
+
+Four newer playbooks run in **learning mode**: Break & Retest, VWAP Reclaim / Reject, Order Block Retest and
+Bollinger Squeeze Breakout. Every setup is tracked silently and the AI learns from it, but you only get
+signals from one once its own last 40 independent trades average clearly above zero after fees
+(at least max(0.05R, 0.6R / sqrt(trades))). It then goes live by itself and your devices get a
+"New strategy live" notification. If its results fade it goes back to learning. Each bot (5m and 15m)
+decides separately. AI & journal -> Playbook health shows LEARNING n/40 or LIVE (PROVEN).
+
+**BTC direction filter (learning):** every setup records whether it went with or against BTC's trend on the
+regime timeframe, and the AI filter learns from that. The hard filter (block altcoin trades against BTC's
+trend) switches itself on only after 30+ such trades did clearly worse than the rest.
+
 ## Optional: Gemini AI review (advisory only)
 
 Adds an **AI review (advisory)** button on each signal and a **Review my journal** button on the Journal tab. Gemini gets only the numbers the bot computed and replies with a TAKE / CAUTION / SKIP opinion and a "check on chart" item. It cannot change entry, stop, target or leverage.

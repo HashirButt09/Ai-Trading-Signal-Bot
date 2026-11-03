@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { STRATEGY_LABEL, type StrategyId } from '../engine/types';
+import { PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type StrategyId } from '../engine/types';
 import { reviewJournal } from '../lib/review';
 import type { Scanner } from '../lib/scanner';
-import { computeStats, independentCount, resolved } from '../engine/journal';
+import { BTC_FILTER_MIN, btcFilter, computeStats, independentCount, resolved } from '../engine/journal';
 import { effectiveThreshold, liveAccuracy } from '../engine/learner';
 import { computeProgress, type AgentRunLike, type VerdictType } from '../engine/progress';
 import { agentGet } from '../lib/server';
@@ -215,13 +215,29 @@ export function Journal({ scanner }: { scanner: Scanner }) {
                   <td>{h.n}</td>
                   <td>{h.n ? pct(h.winRate, 0) : '-'}</td>
                   <td className={h.expectancyR >= 0 ? 'up-t' : 'down-t'}>{h.n ? `${num(h.expectancyR, 2)}R` : '-'}</td>
-                  <td>{h.paused ? <span className="badge down">AUTO-PAUSED</span> : <span className="badge up">ACTIVE</span>}</td>
+                  <td>
+                    {h.learning ? (
+                      <span className="badge neutral" title={`Live once ${PROMOTE_MIN_TRADES}+ independent trades average at least ${num(h.needR ?? 0, 2)}R after fees`}>LEARNING {Math.min(h.n, PROMOTE_MIN_TRADES)}/{PROMOTE_MIN_TRADES}</span>
+                    ) : h.paused ? <span className="badge down">AUTO-PAUSED</span> : PROBATION.has(k) ? <span className="badge up">LIVE (PROVEN)</span> : <span className="badge up">ACTIVE</span>}
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table></div>
-        <div className="muted small">A playbook pauses automatically when its rolling expectancy turns clearly negative; it keeps being tracked and resumes if it recovers.</div>
+        <div className="muted small">A playbook pauses automatically when its rolling expectancy turns clearly negative; it keeps being tracked and resumes if it recovers.
+          {' '}<b>LEARNING</b> playbooks are new: every setup is tracked silently and the AI learns from it, and they start sending you signals by themselves once {PROMOTE_MIN_TRADES}+ independent trades are clearly profitable after fees (you get a notification). They go back to learning if results fade.</div>
+        {(() => {
+          const b = btcFilter(all, scanner.settings);
+          return (
+            <div className="muted small" style={{ marginTop: 6 }}>
+              <b>BTC direction filter:</b>{' '}
+              {b.active
+                ? <>on. Altcoin trades against BTC's {scanner.settings.htf} trend averaged {num(b.avgAgainst, 2)}R vs {num(b.avgOther, 2)}R for the rest, so they are now blocked (still tracked).</>
+                : <>learning ({Math.min(b.nAgainst, BTC_FILTER_MIN)}/{BTC_FILTER_MIN} trades against BTC's trend{b.nAgainst ? `, ${num(b.avgAgainst, 2)}R vs ${num(b.avgOther, 2)}R for the rest` : ''}). It switches on by itself only if those trades do clearly worse.</>}
+            </div>
+          );
+        })()}
       </div>
 
       <div className="card">

@@ -149,7 +149,8 @@ export function windows(hist: Hist) {
 
 export function evaluateParams(hist: Hist, s: Settings, w: { fitEnd: number; selEnd: number }): Eval {
   const trades: BtTrade[] = [];
-  hist.forEach(({ L, H }, sym) => trades.push(...runBacktest(sym, L, H, s).trades));
+  const btc = hist.get('BTCUSDT')?.H ?? null;
+  hist.forEach(({ L, H }, sym) => trades.push(...runBacktest(sym, L, H, s, btc).trades));
   trades.sort((a, b) => a.entry.signal.time - b.entry.signal.time);
   const fit = trades.filter((t) => t.entry.signal.time < w.fitEnd);
   let select = trades.filter((t) => t.entry.signal.time >= w.fitEnd && t.entry.signal.time < w.selEnd);

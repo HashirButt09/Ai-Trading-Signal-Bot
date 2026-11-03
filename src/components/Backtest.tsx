@@ -51,12 +51,14 @@ export function Backtest({ scanner, onImport }: { scanner: Scanner; onImport: (p
     const htfN = Math.ceil((days * 86_400_000) / TF_MS[s.htf]) + 120;
     let all: BtTrade[] = [];
     let candles = 0;
+    // BTC on the regime timeframe, so each setup knows whether it went with or against BTC's trend
+    const btc = await fetchHistory('BTCUSDT', s.htf, htfN).catch(() => null);
     for (let k = 0; k < list.length; k++) {
       setMsg(`${tag}Downloading ${list[k]} (${k + 1}/${list.length})…`);
       const [l, h] = await Promise.all([fetchHistory(list[k], s.ltf, ltfN), fetchHistory(list[k], s.htf, htfN)]);
       setMsg(`${tag}Simulating ${list[k]}…`);
       await new Promise((r) => setTimeout(r, 20)); // let the UI paint
-      all = all.concat(runBacktest(list[k], l, h, s).trades);
+      all = all.concat(runBacktest(list[k], l, h, s, btc).trades);
       candles += l.length;
     }
     all.sort((a, b) => a.entry.signal.time - b.entry.signal.time);

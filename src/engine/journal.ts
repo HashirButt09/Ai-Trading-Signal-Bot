@@ -1,4 +1,4 @@
-import { ALL_STRATEGIES, isIgnored, type Candle, type JournalEntry, type Outcome, type Settings, type Signal, type StrategyId } from './types.js';
+import { ALL_STRATEGIES, isIgnored, PROBATION, PROMOTE_MIN_TRADES, type Candle, type JournalEntry, type Outcome, type Settings, type Signal, type StrategyId } from './types.js';
 import { featurize, predictMeta, trainMeta, type MetaModel, type Sample } from './meta.js';
 import { effectiveThreshold, retrainGated } from './learner.js';
 
@@ -128,7 +128,12 @@ export interface PlaybookHealth {
   winRate: number;
   expectancyR: number;
   paused: boolean;
+  learning?: boolean; // probation playbook that has not proven itself yet (tracked silently)
+  needR?: number; // average R it must reach (after fees) to go live
 }
+
+/** the average R a learning playbook must show over n independent trades: clearly above zero, above noise */
+export const promoteBar = (n: number) => Math.max(0.05, 0.6 / Math.sqrt(Math.max(1, n)));
 
 /**
  * Rolling health of each playbook over its last 40 resolved signals (shadow signals included).
@@ -144,6 +149,12 @@ export function playbookHealth(list: JournalEntry[], s: Settings): Record<Strate
       .slice(-40)
       .map((c) => c.reduce((a, e) => a + e.rNet, 0) / c.length);
     const st = computeStats(rs);
+    if (PROBATION.has(k)) {
+      // learning mode: live only while its last 40 independent trades are clearly profitable after fees
+      const proven = st.n >= PROMOTE_MIN_TRADES && st.avgR >= promoteBar(st.n);
+      out[k] = { strategy: k, n: st.n, winRate: st.winRate, expectancyR: st.avgR, paused: false, learning: !proven, needR: promoteBar(Math.max(st.n, PROMOTE_MIN_TRADES)) };
+      return;
+    }
     out[k] = {
       strategy: k,
       n: st.n,
@@ -192,10 +203,39 @@ export interface GateDecision {
   reason?: string;
 }
 
+/**
+ * The "against BTC's trend" filter learns too: it only switches on once the bot's own trades show that
+ * altcoin trades against BTC's higher-timeframe trend did clearly worse than the others.
+ */
+export interface BtcFilter {
+  active: boolean;
+  nAgainst: number;
+  avgAgainst: number;
+  nOther: number;
+  avgOther: number;
+}
+export const BTC_FILTER_MIN = 30;
+export function btcFilter(list: JournalEntry[], s: Settings): BtcFilter {
+  const done = resolved(list).filter((e) => !isIgnored(e, s) && e.signal.features.btcAlign !== undefined);
+  const groups = (xs: JournalEntry[]) => clusters(xs).map((c) => c.reduce((a, e) => a + e.rNet, 0) / c.length);
+  const against = groups(done.filter((e) => e.signal.features.btcAlign === -1).slice(-200));
+  const other = groups(done.filter((e) => (e.signal.features.btcAlign ?? 0) >= 0).slice(-200));
+  const a = computeStats(against), o = computeStats(other);
+  const margin = Math.max(0.15, 0.6 / Math.sqrt(Math.max(1, a.n)));
+  return { active: a.n >= BTC_FILTER_MIN && o.n >= BTC_FILTER_MIN && a.avgR < o.avgR - margin && a.avgR < 0, nAgainst: a.n, avgAgainst: a.avgR, nOther: o.n, avgOther: o.avgR };
+}
+
 /** Decide whether a fresh signal is shown to the user or silently tracked. */
-export function gate(sig: Signal, model: MetaModel | null, health: Record<StrategyId, PlaybookHealth>, s: Settings): GateDecision {
-  if (health[sig.strategy]?.paused) {
-    return { status: 'PAUSED', reason: `${sig.strategy} paused: recent expectancy ${health[sig.strategy].expectancyR.toFixed(2)}R` };
+export function gate(sig: Signal, model: MetaModel | null, health: Record<StrategyId, PlaybookHealth>, s: Settings, btc?: BtcFilter | null): GateDecision {
+  const h = health[sig.strategy];
+  if (h?.learning) {
+    return { status: 'PAUSED', reason: `${sig.strategy} in learning mode: ${h.n}/${PROMOTE_MIN_TRADES} trades, ${h.expectancyR.toFixed(2)}R avg (needs ${(h.needR ?? 0).toFixed(2)}R)` };
+  }
+  if (h?.paused) {
+    return { status: 'PAUSED', reason: `${sig.strategy} paused: recent expectancy ${h.expectancyR.toFixed(2)}R` };
+  }
+  if (btc?.active && sig.features.btcAlign === -1) {
+    return { status: 'FILTERED', reason: `against BTC's trend: such trades averaged ${btc.avgAgainst.toFixed(2)}R vs ${btc.avgOther.toFixed(2)}R` };
   }
   if (model && model.n >= s.metaMinSamples && !model.off) {
     const p = predictMeta(model, sig);
