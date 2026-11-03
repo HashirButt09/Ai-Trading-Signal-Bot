@@ -54,6 +54,27 @@ export interface Tune {
 }
 export const DEFAULT_TUNE: Tune = { regimeAdx: 22, fvgMaxPos: 0.65, emaVolMin: 0.8, sweepWickMin: 0.35 };
 
+/** values the daily agent tunes; a second timeframe profile keeps its own copy once the agent tunes it */
+export interface TunedParams {
+  tpR: number;
+  minSlPct: number;
+  metaThreshold: number;
+  tune: Tune;
+  enabled: Record<StrategyId, boolean>;
+}
+
+/**
+ * An extra timeframe bot that runs beside the main one (settings.ltf / settings.htf), with its own
+ * journal, AI filter, playbook health and agent. Risk, pairs and your floors are shared.
+ */
+export interface ProfileCfg {
+  id: string; // e.g. '15m' (storage keys get this suffix)
+  ltf: string;
+  htf: string;
+  enabled: boolean;
+  tuned?: TunedParams | null; // set by this profile's daily agent; until then it uses the main values
+}
+
 export interface Settings {
   maxLossUsd: number; // max loss at stop, incl. estimated costs
   marginUsd: number; // margin per trade
@@ -83,14 +104,20 @@ export interface Settings {
   minWinChance: number; // your floor for the AI's estimated win chance (0 = off); the agent cannot lower it
   maxOpenTrades: number; // max simultaneous active trades across all coins
   maxNewPerCandle: number; // max new active trades on a single candle close
-  ignoreBefore: number; // ignore trades resolved before this epoch ms (default: deploy time of 7ddaa87)
+  ignoreBefore: number; // also ignore trades resolved before this epoch ms (0 = off)
+  ignoreFrom: number; // ignore trades that were open or resolved inside [ignoreFrom, ignoreTo] (0 = off)
+  ignoreTo: number;
+  profiles: ProfileCfg[]; // extra timeframe bots beside the main one
   editedAt: number; // when settings were last changed on this device (newer side wins when syncing)
 }
 
 export const BUG_DEPLOY_TIME = 1793694732000; // time commit 7ddaa87 was deployed (2026-11-03T08:32:12.000Z)
+/** the multi-coin price bug: trades open or closed in this window were scored with other coins' prices */
+export const BUG_WINDOW_FROM = 1793662590000; // commit 1c68fc9 (bug introduced)
+export const BUG_WINDOW_TO = BUG_DEPLOY_TIME + 10 * 60_000; // commit 7ddaa87 (fix) + time for the deploy
 
 export function parseIgnoreBefore(val?: number | string | Date | null): number {
-  if (val === undefined || val === null) return BUG_DEPLOY_TIME;
+  if (val === undefined || val === null) return 0;
   if (typeof val === 'number') {
     if (val === 0) return 0;
     return val < 1e11 ? val * 1000 : val;
@@ -98,6 +125,27 @@ export function parseIgnoreBefore(val?: number | string | Date | null): number {
   if (val instanceof Date) return val.getTime();
   const parsed = Date.parse(String(val));
   return isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Old versions set ignoreBefore to the fix time, which threw away ALL older (good) history.
+ * That value is replaced by the bug window, so only the badly scored trades are skipped.
+ */
+export function migrateSettings<T extends Partial<Settings>>(s: T): T {
+  const out: any = { ...s };
+  if (out.ignoreBefore === BUG_DEPLOY_TIME) out.ignoreBefore = 0;
+  if (typeof out.ignoreFrom !== 'number') out.ignoreFrom = BUG_WINDOW_FROM;
+  if (typeof out.ignoreTo !== 'number') out.ignoreTo = BUG_WINDOW_TO;
+  return out;
+}
+
+/** true when a journal entry must not be used for learning, health, the agent or progress */
+export function isIgnored(e: JournalEntry, s?: Partial<Settings> | null): boolean {
+  const end = e.resolvedAt ?? e.signal.time;
+  if (end < parseIgnoreBefore(s?.ignoreBefore)) return true;
+  const from = s?.ignoreFrom ?? BUG_WINDOW_FROM;
+  const to = s?.ignoreTo ?? BUG_WINDOW_TO;
+  return from > 0 && to > from && e.signal.time <= to && end >= from;
 }
 
 export const SYMBOL_ALIASES: Record<string, string> = {
@@ -166,7 +214,10 @@ export const DEFAULT_SETTINGS: Settings = {
   tune: { ...DEFAULT_TUNE },
   agentEnabled: true,
   minWinChance: 0,
-  ignoreBefore: BUG_DEPLOY_TIME,
+  ignoreBefore: 0,
+  ignoreFrom: BUG_WINDOW_FROM,
+  ignoreTo: BUG_WINDOW_TO,
+  profiles: [{ id: '15m', ltf: '15m', htf: '4h', enabled: true }],
   editedAt: 0
 };
 

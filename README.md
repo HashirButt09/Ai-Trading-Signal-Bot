@@ -102,6 +102,29 @@ Every run is logged in the Journal tab: decision, Gemini's read, what was tried,
 
 **Gemini free key:** get it at https://aistudio.google.com/apikey and add `GEMINI_API_KEY` in Vercel (same as for the review). The agent uses one Gemini call a day, far inside the free limits. Google may use free-tier prompts to improve its products; the agent only sends trade statistics, never your keys or passcode.
 
+## Two bots: 5m / 1h and 15m / 4h (needs the server)
+
+The server runs a second bot on 15m execution / 4h regime beside your main bot. Each one has its own
+journal, AI filter, playbook health and daily agent, and learns only from its own trades. Pairs, risk,
+playbooks and your minimum win chance are shared.
+
+- Switch between them with **Bot: 5m / 1h | 15m / 4h** at the top of Live, Trades and AI & journal.
+  The **Compare bots** card on AI & journal shows both side by side.
+- Backtest tab: pick one bot, or **Compare both bots** on the same pairs and period. This never changes your settings.
+- The 15m bot only scans when a 15m candle closes. If a run is already long, it waits for the next minute.
+- Its agent runs daily around 06:47 UTC (second cron in `vercel.json`). When it tunes something, the change
+  is stored on the 15m bot only; your main bot's values stay as they are.
+- Turn it off in Settings -> Timeframes ("Also run a second bot…"). The main bot keeps its original storage,
+  so nothing it learned moves or changes.
+
+## Learning safeguards
+
+- **Ignore window:** trades that were open or closed during the multi-coin price bug (2-3 Nov 2026) are
+  skipped by learning, auto-pause, the agent and the progress card. All other history is used. Settings ->
+  AI learning shows the window; clear both dates to use every trade.
+- **Correlated signals:** when many coins trigger the same side on the same candle, that is one market move.
+  The AI filter, its learning-style scores and playbook auto-pause count such a group as one trade.
+
 ## Optional: Gemini AI review (advisory only)
 
 Adds an **AI review (advisory)** button on each signal and a **Review my journal** button on the Journal tab. Gemini gets only the numbers the bot computed and replies with a TAKE / CAUTION / SKIP opinion and a "check on chart" item. It cannot change entry, stop, target or leverage.

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { STRATEGY_LABEL, type StrategyId } from '../engine/types';
 import { reviewJournal } from '../lib/review';
 import type { Scanner } from '../lib/scanner';
-import { computeStats, resolved } from '../engine/journal';
+import { computeStats, independentCount, resolved } from '../engine/journal';
 import { effectiveThreshold, liveAccuracy } from '../engine/learner';
 import { computeProgress, type AgentRunLike, type VerdictType } from '../engine/progress';
 import { agentGet } from '../lib/server';
@@ -36,13 +36,13 @@ export function Journal({ scanner }: { scanner: Scanner }) {
   const [runs, setRuns] = useState<AgentRunLike[]>([]);
   useEffect(() => {
     if (scanner.server.mode === 'on' && scanner.settings.reviewPasscode) {
-      agentGet(scanner.settings.reviewPasscode)
+      agentGet(scanner.settings.reviewPasscode, scanner.viewProfile)
         .then((res) => {
           if (Array.isArray(res?.runs)) setRuns(res.runs);
         })
         .catch(() => {});
     }
-  }, [scanner.server.mode, scanner.settings.reviewPasscode]);
+  }, [scanner.server.mode, scanner.settings.reviewPasscode, scanner.viewProfile]);
 
   const progress = computeProgress(all, runs, scanner.settings);
   const [rev, setRev] = useState<{ text?: string; error?: string; busy?: boolean }>({});
@@ -192,10 +192,10 @@ export function Journal({ scanner }: { scanner: Scanner }) {
           <div className="label">Your live signals (resolved)</div>
           <div className="big">{sLive.n ? `${pct(sLive.winRate, 0)} win · ${num(sLive.avgR, 2)}R avg` : 'none yet'}</div>
           <div className="muted small">
-            {sLive.n} trades · total {num(sLive.totalR, 1)}R net of costs · PF {num(sLive.profitFactor)} · max DD {num(sLive.maxDrawdownR, 1)}R
+            {sLive.n} trades ({independentCount(live)} independent) · total {num(sLive.totalR, 1)}R net of costs · PF {num(sLive.profitFactor)} · max DD {num(sLive.maxDrawdownR, 1)}R
           </div>
           <div className="muted small" style={{ marginTop: 6 }}>
-            Silently tracked (filtered/paused): {sShadow.n} {sShadow.n ? `· ${pct(sShadow.winRate, 0)} win · ${num(sShadow.avgR, 2)}R avg` : ''} · Backtest seed: {seeded.length}
+            Silently tracked (filtered/paused): {sShadow.n} ({independentCount(shadow)} independent) {sShadow.n ? `· ${pct(sShadow.winRate, 0)} win · ${num(sShadow.avgR, 2)}R avg` : ''} · Backtest seed: {seeded.length}
           </div>
         </div>
       </div>

@@ -97,7 +97,7 @@ export function trainMeta(samples: Sample[], iters = 800, lr = 0.2, l2 = 0.05): 
 
   const X = samples.map((s) => s.x.map((v, j) => (v - mean[j]) / std[j]));
   const y = samples.map((s) => s.y);
-  const baseRate = y.reduce<number>((a, b) => a + b, 0) / n;
+  const baseRate = y.reduce<number>((a, v, i) => a + v * wt[i], 0) / wsum; // weighted win rate
 
   const w = new Array(d).fill(0);
   let b = Math.log((baseRate + 1e-6) / (1 - baseRate + 1e-6));

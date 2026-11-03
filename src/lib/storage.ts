@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, normalizeSymbol, type JournalEntry, type Settings } from '../engine/types';
+import { DEFAULT_SETTINGS, migrateSettings, normalizeSymbol, type JournalEntry, type Settings } from '../engine/types';
 import type { MetaModel } from '../engine/meta';
 
 const K_SETTINGS = 'st.settings.v1';
@@ -23,7 +23,7 @@ function write(key: string, v: unknown) {
 }
 
 export function loadSettings(): Settings {
-  const s = read<Partial<Settings>>(K_SETTINGS) ?? {};
+  const s = migrateSettings(read<Partial<Settings>>(K_SETTINGS) ?? {});
   const old8 = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'POLUSDT', 'LINKUSDT'];
   const isOld8 = s.watchlist && s.watchlist.length === 8 && old8.every((x) => s.watchlist!.includes(x));
   const raw = !s.watchlist || isOld8 || s.watchlist.length < 5 ? [...DEFAULT_SETTINGS.watchlist] : s.watchlist;

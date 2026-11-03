@@ -2,17 +2,27 @@
  * Self-tuning AI agent.
  *  - Vercel Cron calls GET once a day with "Authorization: Bearer CRON_SECRET" -> runs the agent.
  *  - The app calls GET with x-app-key -> agent log; POST {action:'run'|'undo'} -> run now / undo last change.
+ *  - ?profile=15m (or body.profile) works on the 15m / 4h bot instead of the main one; it has its own cron.
  * Env: GEMINI_API_KEY (optional but recommended), GEMINI_MODEL (optional), plus the server variables.
  */
 import { fetchHistory } from '../src/lib/binance.js';
 import { checkApp, checkCron, json } from '../server/http.js';
 import { kvConfig, restKv, type Kv } from '../server/kv.js';
-import { K } from '../server/store.js';
+import { K, loadAll } from '../server/store.js';
+import { hasProfile, MAIN } from '../src/engine/profiles.js';
 import { loadAgent, resumeAgent, runAgent, undoLast, BOUNDS } from '../server/agent.js';
 import { geminiJson, geminiReady } from '../server/gemini.js';
 import { vapidReady, webPushSender } from '../server/push.js';
 
-async function run(kv: Kv, trigger: 'cron' | 'manual') {
+/** the profile a request asks for, if it exists (unknown ids fall back to the main bot) */
+async function profileOf(kv: Kv, raw: unknown): Promise<string> {
+  const id = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  if (!id || id === MAIN) return MAIN;
+  const { settings } = await loadAll(kv);
+  return hasProfile(settings, id) ? id : MAIN;
+}
+
+async function run(kv: Kv, trigger: 'cron' | 'manual', profile: string = MAIN) {
   if ((await kv.cmd('SET', K.agentLock, '1', 'NX', 'EX', 120)) !== 'OK') return json({ error: 'The agent is already running. Try again in a minute.' }, 409);
   try {
     const result = await runAgent(
@@ -22,7 +32,8 @@ async function run(kv: Kv, trigger: 'cron' | 'manual') {
         gemini: geminiReady() ? geminiJson : null,
         send: vapidReady() ? webPushSender : undefined
       },
-      trigger
+      trigger,
+      profile
     );
     return json({ ok: true, run: result });
   } catch (e: any) {
@@ -40,11 +51,12 @@ function kvOrError(): Kv | Response {
 export async function GET(req: Request): Promise<Response> {
   const kv = kvOrError();
   if (kv instanceof Response) return kv;
-  if (!checkCron(req)) return run(kv, 'cron');
+  const profile = await profileOf(kv, new URL(req.url).searchParams.get('profile'));
+  if (!checkCron(req)) return run(kv, 'cron', profile);
   const denied = checkApp(req);
   if (denied) return denied;
-  const state = await loadAgent(kv);
-  return json({ ...state, gemini: geminiReady(), bounds: BOUNDS });
+  const state = await loadAgent(kv, profile);
+  return json({ ...state, profile, gemini: geminiReady(), bounds: BOUNDS });
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -53,11 +65,12 @@ export async function POST(req: Request): Promise<Response> {
   const kv = kvOrError();
   if (kv instanceof Response) return kv;
   const body: any = await req.json().catch(() => ({}));
-  if (body?.action === 'run') return run(kv, 'manual');
-  if (body?.action === 'resume') return json({ ok: true, run: await resumeAgent(kv) });
+  const profile = await profileOf(kv, body?.profile);
+  if (body?.action === 'run') return run(kv, 'manual', profile);
+  if (body?.action === 'resume') return json({ ok: true, run: await resumeAgent(kv, Date.now(), profile) });
   if (body?.action === 'undo') {
     try {
-      return json({ ok: true, run: await undoLast(kv) });
+      return json({ ok: true, run: await undoLast(kv, Date.now(), profile) });
     } catch (e: any) {
       return json({ error: String(e?.message ?? e) }, 400);
     }

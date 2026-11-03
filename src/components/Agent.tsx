@@ -62,25 +62,28 @@ export function Agent({ scanner, settings, onChange }: { scanner: Scanner; setti
   const [err, setErr] = useState('');
   const [open, setOpen] = useState<number | null>(0);
   const remote = scanner.server.mode === 'on';
+  const profile = scanner.viewProfile;
+  const label = profile === 'main' ? '' : ` · ${scanner.settings.ltf} / ${scanner.settings.htf} bot`;
 
   const load = async () => {
     try {
-      setData(await agentGet(settings.reviewPasscode));
+      setData(await agentGet(settings.reviewPasscode, profile));
       setErr('');
     } catch (e: any) {
       setErr(e?.message ?? String(e));
     }
   };
   useEffect(() => {
+    setData(null);
     if (remote) void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remote]);
+  }, [remote, profile]);
 
   const act = async (a: 'run' | 'undo' | 'resume') => {
     setBusy(a);
     setErr('');
     try {
-      await agentPost(settings.reviewPasscode, a);
+      await agentPost(settings.reviewPasscode, a, profile);
       await load();
       await scanner.poll();
       setOpen(0);
@@ -107,7 +110,7 @@ export function Agent({ scanner, settings, onChange }: { scanner: Scanner; setti
     <div className="page" style={{ paddingBottom: 0 }}>
       <div className="card form">
         <div className="row between wrap gap">
-          <div className="label">AI agent (self-tuning, runs daily)</div>
+          <div className="label">AI agent (self-tuning, runs daily){label}</div>
           <div className="row gap wrap">
             <button className="btn small primary" disabled={!!busy} onClick={() => act('run')}>{busy === 'run' ? 'Running… (up to a minute)' : 'Run now'}</button>
             <button className="btn small" disabled={!!busy || !data?.lastChange} onClick={() => confirm('Undo the agent’s last change?') && act('undo')}>Undo last change</button>
@@ -137,7 +140,8 @@ export function Agent({ scanner, settings, onChange }: { scanner: Scanner; setti
           ) : null;
         })()}
         {err && <div className="down-t small">{err}</div>}
-        {runs.length === 0 && <div className="muted small">No runs yet. The first daily run happens around 04:23 UTC, or tap Run now.</div>}
+        {runs.length === 0 && <div className="muted small">No runs yet. The first daily run happens around {profile === 'main' ? '04:23' : '06:47'} UTC, or tap Run now.</div>}
+        {profile !== 'main' && <div className="muted small">This bot has its own agent: it learns from its own trades and tunes its own copy of the rule settings. The on/off switch above is shared by both bots.</div>}
         {runs.slice(0, 15).map((r, i) => (
           <div key={r.at + r.decision} className="scenario small" style={{ cursor: 'pointer' }} onClick={() => setOpen(open === i ? null : i)}>
             <div className="row gap wrap">
