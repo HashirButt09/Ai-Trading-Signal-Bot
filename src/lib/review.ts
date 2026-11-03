@@ -95,15 +95,35 @@ export function reviewJournal(journal: JournalEntry[], model: MetaModel | null, 
 }
 
 /** Coach-style explanation of one trade (plan, what happened, right, wrong, lesson). */
-export function reviewTrade(e: JournalEntry, settings: Settings) {
+export function reviewTrade(
+  e: JournalEntry,
+  settings: Settings,
+  health?: Record<StrategyId, PlaybookHealth>,
+  model?: MetaModel | null
+) {
   const s = e.signal;
   const rv = buildReview(e);
+  const play = playName(s);
+  const h = health ? health[s.strategy] : undefined;
+  const playbookHealth = h && h.n !== undefined ? {
+    name: play,
+    paused: !!h.paused,
+    expectancyR: r2(h.expectancyR),
+    trades: h.n
+  } : undefined;
+  const learningStyle = model?.gate?.choice ?? model?.kind ?? (model ? 'active' : 'none');
+  const aiFilter = {
+    learningStyle,
+    pWin: s.pWin !== undefined ? r2(s.pWin) : null
+  };
   return call(settings, {
     mode: 'trade',
     data: {
       symbol: s.symbol,
       side: s.side,
-      playbook: playName(s),
+      playbook: play,
+      ...(playbookHealth ? { playbookHealth } : {}),
+      aiFilter,
       regime: s.regime,
       timeframes: `${s.ltf} execution, ${s.htf} regime`,
       plan_text: s.scenario || '(not stored)',
@@ -118,7 +138,6 @@ export function reviewTrade(e: JournalEntry, settings: Settings) {
       hour_utc: s.features.hour,
       with_htf_trend: !!s.features.trendAligned,
       candlestick_patterns_at_trigger: (s.patterns ?? []).map((p) => PATTERN_INFO[p]?.name ?? p),
-      ai_win_probability: s.pWin === undefined ? 'not scored' : r2(s.pWin),
       outcome: e.outcome,
       net_R_after_costs: r2(e.rNet),
       best_move_in_favour_R: r2(e.mfeR ?? 0),

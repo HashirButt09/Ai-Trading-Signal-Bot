@@ -39,6 +39,37 @@ ok(JSON.parse(lastCall!.init.body).tools?.[0]?.google_search !== undefined, 'use
 r = await mod.POST(req({ mode: 'journal', useSearch: true, data: {} }, { 'x-app-key': 'letmein' }));
 ok(!JSON.parse(lastCall!.init.body).tools, 'search is never enabled for journal mode');
 
+// Trade mode tests: clear labeling, playbookHealth only for this playbook, aiFilter, prompt guard
+mod.hits.length = 0;
+const tradeBody = {
+  mode: 'trade',
+  data: {
+    symbol: 'ETHUSDT',
+    strategy: 'RANGE_SWEEP_RECLAIM',
+    health: {
+      RANGE_SWEEP_RECLAIM: { n: 14, expectancyR: 0.25, paused: false, winRate: 0.6 },
+      TREND_EMA_PULLBACK: { n: 20, expectancyR: -0.15, paused: true, winRate: 0.3 }
+    },
+    model: {
+      kind: 'recent',
+      gate: { choice: 'recent' }
+    },
+    pWin: 0.65
+  }
+};
+r = await mod.POST(req(tradeBody, { 'x-app-key': 'letmein' }));
+const tradeSent = JSON.parse(lastCall!.init.body);
+const tradePrompt = tradeSent.contents[0].parts[0].text;
+ok(r.status === 200, 'trade mode request succeeds');
+ok(tradePrompt.includes("Judge only this trade's playbook; learningStyle is not a playbook."), "trade prompt instructs Gemini that learningStyle is not a playbook");
+ok(tradePrompt.includes('"playbook": "Range Sweep & Reclaim"'), 'trade playbook uses formatted playName ("Range Sweep & Reclaim")');
+ok(tradePrompt.includes('"playbookHealth"'), 'trade payload includes playbookHealth');
+ok(tradePrompt.includes('"trades": 14') && tradePrompt.includes('"expectancyR": 0.25'), 'playbookHealth has {name, paused, expectancyR, trades}');
+ok(!tradePrompt.includes('TREND_EMA_PULLBACK'), "only sends health for THIS trade's playbook (other playbooks excluded)");
+ok(tradePrompt.includes('"learningStyle": "recent"') && tradePrompt.includes('"pWin": 0.65'), 'aiFilter has {learningStyle, pWin}');
+ok(!tradePrompt.includes('"health":'), 'raw health dictionary stripped from payload');
+mod.hits.length = 0;
+
 process.env.GEMINI_MODEL = 'custom-model';
 await mod.POST(req(sig, { 'x-app-key': 'letmein' }));
 ok(lastCall!.url.includes('custom-model'), 'GEMINI_MODEL env var overrides the model');

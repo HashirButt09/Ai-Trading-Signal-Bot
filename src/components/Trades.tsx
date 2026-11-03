@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { STRATEGY_LABEL, type JournalEntry, type Settings } from '../engine/types';
-import { computeStats, rUsd } from '../engine/journal';
+import { STRATEGY_LABEL, type JournalEntry, type Settings, type StrategyId } from '../engine/types';
+import { computeStats, rUsd, type PlaybookHealth } from '../engine/journal';
+import type { MetaModel } from '../engine/meta';
 import { buildReview } from '../engine/lessons';
 import { playName } from '../engine/names';
 import { BY_ID } from '../learn/library';
@@ -138,7 +139,18 @@ export function Trades({ scanner, settings, onShow, onLearn }: Props) {
           </div>
         )}
         {shown.map((e) => (
-          <TradeRow key={e.signal.id} e={e} price={scanner.state.get(e.signal.symbol)?.price} open={open === e.signal.id} onToggle={() => setOpen(open === e.signal.id ? null : e.signal.id)} onShow={onShow} onLearn={onLearn} settings={settings} />
+          <TradeRow
+            key={e.signal.id}
+            e={e}
+            price={scanner.state.get(e.signal.symbol)?.price}
+            open={open === e.signal.id}
+            onToggle={() => setOpen(open === e.signal.id ? null : e.signal.id)}
+            onShow={onShow}
+            onLearn={onLearn}
+            settings={settings}
+            health={scanner.health}
+            model={scanner.model}
+          />
         ))}
       </div>
     </div>
@@ -161,7 +173,27 @@ const RES: Record<string, { t: string; c: string }> = {
   EXPIRED: { t: 'EXPIRED', c: 'out-EXPIRED' }
 };
 
-function TradeRow({ e, price, open, onToggle, onShow, onLearn, settings }: { e: JournalEntry; price?: number; open: boolean; onToggle: () => void; onShow: (e: JournalEntry) => void; onLearn: (id: string) => void; settings: Settings }) {
+function TradeRow({
+  e,
+  price,
+  open,
+  onToggle,
+  onShow,
+  onLearn,
+  settings,
+  health,
+  model
+}: {
+  e: JournalEntry;
+  price?: number;
+  open: boolean;
+  onToggle: () => void;
+  onShow: (e: JournalEntry) => void;
+  onLearn: (id: string) => void;
+  settings: Settings;
+  health?: Record<StrategyId, PlaybookHealth>;
+  model?: MetaModel | null;
+}) {
   const s = e.signal;
   const lr = liveR(e, price);
   const r = e.outcome === 'OPEN' ? lr : e.rNet;
@@ -170,7 +202,7 @@ function TradeRow({ e, price, open, onToggle, onShow, onLearn, settings }: { e: 
   const ask = async () => {
     setAi({ busy: true });
     try {
-      setAi({ text: await reviewTrade(e, settings) });
+      setAi({ text: await reviewTrade(e, settings, health, model) });
     } catch (err: any) {
       setAi({ error: err?.message ?? String(err) });
     }
