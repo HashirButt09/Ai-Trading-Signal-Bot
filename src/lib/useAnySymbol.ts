@@ -4,7 +4,13 @@ import { fetchKlines, fetchSinglePrice, fetchSymbols, parseKlineMessage, streamU
 
 /** Live candles for a pair that is not in the scanned watchlist (chart only, no signals). */
 export function useExtraSeries(symbol: string, interval: string, enabled: boolean): { candles: Candle[]; error: string } {
-  const [candles, setCandles] = useState<Candle[]>([]);
+  // candles are tagged with the coin and timeframe they belong to, so a chart never gets the
+  // previous coin's candles for one render after you switch
+  const want = `${symbol}|${interval}`;
+  const [data, setData] = useState<{ key: string; candles: Candle[] }>({ key: '', candles: [] });
+  const setCandles = (f: Candle[] | ((prev: Candle[]) => Candle[])) =>
+    setData((d) => ({ key: want, candles: typeof f === 'function' ? f(d.key === want ? d.candles : []) : f }));
+  const candles = data.key === want ? data.candles : [];
   const [error, setError] = useState('');
   useEffect(() => {
     if (!enabled) return;

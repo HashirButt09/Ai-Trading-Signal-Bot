@@ -216,7 +216,11 @@ export function Chart({ symbol, interval, candles, entries, selected, indicators
 
   // data
   useEffect(() => {
-    if (!cs.current || candles.length === 0) return;
+    if (!cs.current) return;
+    if (candles.length === 0) {
+      lastKey.current = ''; // the next candles are a fresh load (another coin or timeframe), never an update
+      return;
+    }
     const key = `${symbol}|${interval}|${indKey}`;
     const step = TF_MS[interval] ?? 60_000;
     const toBar = (c: Candle) => ({ time: ts(c.t), open: c.o, high: c.h, low: c.l, close: c.c });
