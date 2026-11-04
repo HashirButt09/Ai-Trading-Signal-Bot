@@ -10,6 +10,7 @@ export const K = {
   model: 'st:model',
   cursor: 'st:cursor', // { SYMBOL: open time of the last 5m (ltf) candle already processed }
   status: 'st:status',
+  took: 'st:took', // "I took it" / "Skipped" marks on shown signals
   subs: 'st:subs', // hash: subscription id -> { sub, pairs }
   lock: 'st:lock',
   pushed: 'st:pushed',
@@ -121,7 +122,11 @@ export function finishCmds(finished: JournalEntry[], profile: string = MAIN): (s
   const k = PK(profile);
   const shown = finished.filter((e) => e.status === 'ACTIVE' && !e.seed);
   const silent = finished.filter((e) => !(e.status === 'ACTIVE' && !e.seed));
-  const lean = (e: JournalEntry): JournalEntry => ({ ...e, signal: { ...e.signal, scenario: '', drawing: undefined, plans: undefined } });
+  // keeps only the exit plan the trade itself used (its result can always be replayed)
+  const lean = (e: JournalEntry): JournalEntry => {
+    const own = e.signal.exitPlan && e.signal.exitPlan !== 'A' ? e.signal.plans?.[e.signal.exitPlan] : undefined;
+    return { ...e, signal: { ...e.signal, scenario: '', drawing: undefined, plans: own ? ({ [e.signal.exitPlan!]: own } as any) : undefined } };
+  };
   const cmds: (string | number)[][] = [];
   if (shown.length) cmds.push(['RPUSH', k.shown, ...shown.map((e) => JSON.stringify(e))], ['LTRIM', k.shown, -SHOWN_KEEP, -1]);
   if (silent.length) cmds.push(['RPUSH', k.silent, ...silent.map((e) => JSON.stringify(lean(e)))], ['LTRIM', k.silent, -SILENT_KEEP, -1]);

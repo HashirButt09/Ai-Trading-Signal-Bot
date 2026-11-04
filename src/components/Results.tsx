@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { ALL_STRATEGIES, EXIT_LABEL, EXIT_PLANS, PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type JournalEntry, type StrategyId } from '../engine/types';
-import { btcFilter, computeStats, exitReport, independentCount } from '../engine/journal';
+import { ALL_STRATEGIES, EXIT_LABEL, EXIT_PLANS, LIMIT_BARS, LIMIT_PULLBACK_R, PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type JournalEntry, type StrategyId } from '../engine/types';
+import { btcFilter, computeStats, entryReport, exitReport, independentCount } from '../engine/journal';
+import { Progress } from './Progress';
 import { FILTER_MIN, FILTERS, learnFilters } from '../engine/filters';
 import { isIgnored } from '../engine/types';
 import type { Scanner } from '../lib/scanner';
@@ -16,7 +17,7 @@ const DAY = 86_400_000;
  * accuracy (share of closed trades in profit), average and total R after fees, its learning status and
  * which exit plan it uses. Tap a strategy to list its trades.
  */
-export function Results({ scanner, onShow }: { scanner: Scanner; onShow: (e: JournalEntry) => void }) {
+export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onShow: (e: JournalEntry) => void; took?: Record<string, [number, number]> }) {
   const [period, setPeriod] = useState<Period>(30);
   const [scope, setScope] = useState<Scope>('all');
   const [filter, setFilter] = useState<Filter>('all');
@@ -39,7 +40,7 @@ export function Results({ scanner, onShow }: { scanner: Scanner; onShow: (e: Jou
     const st = computeStats(closed.map((e) => e.rNet));
     return { n: xs.length, indep: independentCount(xs), profit: closed.filter((e) => e.rNet > 0).length, loss: closed.filter((e) => e.rNet <= 0).length, open: xs.length - closed.length, acc: closed.length ? st.wins / closed.length : NaN, avgR: st.avgR, totalR: st.totalR, closed: closed.length };
   };
-  const rows = ALL_STRATEGIES.map((k) => ({ k, ...row(inView.filter((e) => e.signal.strategy === k)), ex: exitReport(all, k, s) })).sort((a, b) => b.n - a.n || ALL_STRATEGIES.indexOf(a.k) - ALL_STRATEGIES.indexOf(b.k));
+  const rows = ALL_STRATEGIES.map((k) => ({ k, ...row(inView.filter((e) => e.signal.strategy === k)), ex: exitReport(all, k, s), en: entryReport(all, k, s) })).sort((a, b) => b.n - a.n || ALL_STRATEGIES.indexOf(a.k) - ALL_STRATEGIES.indexOf(b.k));
   const total = row(inView);
   const btc = btcFilter(all, s);
   const lab = useMemo(() => learnFilters(all, s), [all, s]);
@@ -69,6 +70,7 @@ export function Results({ scanner, onShow }: { scanner: Scanner; onShow: (e: Jou
 
   return (
     <div className="page">
+      <Progress all={all} s={s} took={took} />
       <div className="card">
         <div className="row between wrap gap">
           <div className="label">Results by strategy · {s.ltf} / {s.htf} bot</div>
@@ -193,9 +195,9 @@ export function Results({ scanner, onShow }: { scanner: Scanner; onShow: (e: Jou
       </div>
 
       <div className="card">
-        <div className="label">Exit lab: four ways out of every trade</div>
+        <div className="label">Exit lab: six ways out of every trade</div>
         <div className="muted small">
-          Every setup is followed with all four exit plans at once. A strategy switches from its own target to another plan by itself once that plan was clearly better on its last {PROMOTE_MIN_TRADES}+ independent setups (average R, after fees).
+          Every setup is followed with all six exit plans at once (E and F started later, so they count their own setups). A strategy switches from its own target to another plan by itself once that plan was clearly better on its last {PROMOTE_MIN_TRADES}+ independent setups (average R, after fees).
         </div>
         <div className="tablewrap" style={{ marginTop: 6 }}>
           <table className="small">
@@ -213,13 +215,41 @@ export function Results({ scanner, onShow }: { scanner: Scanner; onShow: (e: Jou
                   <td>{r.ex.n}{r.ex.n < PROMOTE_MIN_TRADES ? `/${PROMOTE_MIN_TRADES}` : ''}</td>
                   {EXIT_PLANS.map((p) => (
                     <td key={p} className={r.ex.choice === p ? 'sel' : ''}>
-                      <span className={r.ex.plans[p].avgR >= 0 ? 'up-t' : 'down-t'}>{num(r.ex.plans[p].avgR, 2)}R</span> <span className="muted">· {pct(r.ex.plans[p].winRate, 0)}</span>
+                      {r.ex.plans[p].n === 0 ? <span className="muted">-</span> : <><span className={r.ex.plans[p].avgR >= 0 ? 'up-t' : 'down-t'}>{num(r.ex.plans[p].avgR, 2)}R</span> <span className="muted">· {pct(r.ex.plans[p].winRate, 0)}{r.ex.plans[p].n < r.ex.n ? ` · ${r.ex.plans[p].n}` : ''}</span></>}
                       {r.ex.choice === p ? ' ✓' : ''}
                     </td>
                   ))}
                 </tr>
               ))}
-              {rows.every((r) => r.ex.n === 0) && <tr><td colSpan={6} className="muted">Fills in as trades and their exit plans finish.</td></tr>}
+              {rows.every((r) => r.ex.n === 0) && <tr><td colSpan={8} className="muted">Fills in as trades and their exit plans finish.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="label">Entry lab: market vs limit entry</div>
+        <div className="muted small">
+          Every setup is also tested with a limit order {LIMIT_PULLBACK_R}R closer to the stop (cheaper maker fee, bigger R if filled), valid {LIMIT_BARS} candles. A limit order that never fills counts as 0R, so missed winners count against it. A strategy switches to limit entries by itself once they earned clearly more on its last {PROMOTE_MIN_TRADES}+ independent setups, and switches back the same way.
+        </div>
+        <div className="tablewrap" style={{ marginTop: 6 }}>
+          <table className="small">
+            <thead>
+              <tr><th style={{ textAlign: 'left' }}>Strategy</th><th>Setups</th><th>Market</th><th>Limit</th><th>Filled</th><th>Missed winners</th><th style={{ textAlign: 'left' }}>Uses</th></tr>
+            </thead>
+            <tbody>
+              {rows.filter((r) => r.en.n > 0).map((r) => (
+                <tr key={r.k}>
+                  <td>{STRATEGY_LABEL[r.k]}</td>
+                  <td>{r.en.n}{r.en.n < PROMOTE_MIN_TRADES ? `/${PROMOTE_MIN_TRADES}` : ''}</td>
+                  <td className={r.en.choice === 'MARKET' ? 'sel' : ''}>{rCell(r.en.market.avgR, r.en.n)} <span className="muted">· {pct(r.en.market.winRate, 0)}</span></td>
+                  <td className={r.en.choice === 'LIMIT' ? 'sel' : ''}>{rCell(r.en.limit.avgR, r.en.n)} <span className="muted">· {pct(r.en.limit.winRate, 0)}</span></td>
+                  <td>{pct(r.en.limit.fillRate, 0)}</td>
+                  <td>{r.en.limit.missedWinners}</td>
+                  <td>{r.en.choice === 'LIMIT' ? <span className="up-t">Limit ✓</span> : r.en.n < PROMOTE_MIN_TRADES ? <span className="muted">Market (learning)</span> : 'Market'}</td>
+                </tr>
+              ))}
+              {rows.every((r) => r.en.n === 0) && <tr><td colSpan={7} className="muted">Fills in as new setups finish (it started with this update).</td></tr>}
             </tbody>
           </table>
         </div>

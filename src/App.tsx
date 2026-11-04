@@ -268,7 +268,7 @@ export default function App() {
               {candles.length === 0 && <div className="overlay muted">Loading {symbol}…</div>}
               <Chart symbol={symbol} interval={interval} candles={candles} entries={symEntries} selected={selected} indicators={inds} onEditIndicator={(id) => setIndMenu({ focus: id })} />
             </div>
-            {selected ? <SignalCard entry={selected} selected full review={{ settings: vset, health: vs.health }} /> : (
+            {selected ? <SignalCard entry={selected} selected full review={{ settings: vset, health: vs.health }} took={{ mark: scanner.took[selected.signal.id]?.[0], set: (m) => void scanner.markTook(selected.signal.id, m) }} /> : (
               <div className="card muted small">
                 Waiting for a confirmed setup. Signals only fire on a <b>closed</b> {vset.ltf} candle, and only for the playbook that matches the current {vset.htf} regime. Select a signal from the list to see its levels and reasoning.
               </div>
@@ -285,7 +285,7 @@ export default function App() {
         </main>
       )}
       {tab === 'backtest' && <Backtest scanner={scanner} onImport={(id, entries) => (id === MAIN ? scanner.importTrades(entries) : void prof.feedOf(id)?.action({ action: 'import', entries, seed: true }))} />}
-      {tab === 'results' && <Results scanner={vs} onShow={showTrade} />}
+      {tab === 'results' && <Results scanner={vs} onShow={showTrade} took={scanner.took} />}
       {tab === 'trades' && <Trades scanner={vs} settings={vset} onShow={showTrade} onLearn={openLearn} />}
       {tab === 'learn' && <Learn focus={learnId} onFocus={setLearnId} />}
       {tab === 'journal' && (

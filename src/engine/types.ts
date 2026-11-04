@@ -94,18 +94,49 @@ export type ExtraKey = (typeof EXTRA_KEYS)[number];
  *  A = the playbook's own target (the original rule)   B = fixed 2R target
  *  C = the next swing level on the chart (1.2R - 4R)    D = stop to break-even at +1R, then 2R
  */
-export type ExitPlanId = 'A' | 'B' | 'C' | 'D';
-export const EXIT_PLANS: ExitPlanId[] = ['A', 'B', 'C', 'D'];
-export const EXIT_LABEL: Record<ExitPlanId, string> = { A: 'Playbook target', B: 'Fixed 2R', C: 'Next swing level', D: 'Break-even at +1R, then 2R' };
+export type ExitPlanId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
+export const EXIT_PLANS: ExitPlanId[] = ['A', 'B', 'C', 'D', 'E', 'F'];
+export const EXIT_LABEL: Record<ExitPlanId, string> = {
+  A: 'Playbook target',
+  B: 'Fixed 2R',
+  C: 'Next swing level',
+  D: 'Break-even at +1R, then 2R',
+  E: 'Time stop: out if not +0.5R in 12 candles',
+  F: 'Half off at 1R, trail the rest'
+};
 export interface PlanLevels {
   tp: number;
   beAtR?: number; // move the stop to break-even (after costs) once price has gone this many R in favour
+  timeBars?: number; // time stop: close after this many candles ...
+  timeMinR?: number; // ... unless price has been at least this many R in favour
+  partialAtR?: number; // take half off here, stop to break-even, trail the rest
+  trailR?: number; // trailing distance for the rest, in R behind the best price
 }
 export interface PlanState {
   outcome: Outcome;
   rNet: number;
   resolvedAt?: number;
   be?: boolean; // the break-even stop is armed
+  peak?: number; // furthest move in favour so far, in R
+  part?: number; // R already banked by a partial exit (as share of the whole position)
+}
+
+/**
+ * Entry lab: every setup is also followed with the other way in. A market entry fills at the close of
+ * the signal candle; a limit entry waits for a pullback of LIMIT_PULLBACK_R towards the stop, for
+ * LIMIT_BARS candles, as a maker order. Missed limit trades count as 0R.
+ */
+export type EntryMode = 'MARKET' | 'LIMIT';
+export const LIMIT_PULLBACK_R = 0.3;
+export const LIMIT_BARS = 3;
+export interface EntryAlt {
+  mode: EntryMode; // the way in this record follows (the one the trade itself does NOT use)
+  price: number;
+  until?: number; // limit only: open time of the last candle it may fill on
+  filled?: number; // candle time it filled
+  outcome: Outcome; // EXPIRED with rNet 0 and no fill = missed
+  rNet: number;
+  resolvedAt?: number;
 }
 
 /** live market context the server adds to each setup (0 / missing when unknown) */
@@ -171,6 +202,7 @@ export interface Settings {
   minSlPct: number; // reject stops tighter than this (fraction)
   takerFee: number; // per side (fraction)
   slippage: number; // round trip (fraction)
+  makerFee: number; // per side for limit (maker) orders (fraction)
   tpR: number; // take-profit in R for trend plays
   ltf: string;
   htf: string;
@@ -275,6 +307,7 @@ export const DEFAULT_SETTINGS: Settings = {
   minSlPct: 0.0015,
   takerFee: 0.0004,
   slippage: 0.0005,
+  makerFee: 0.0002,
   tpR: 1.5,
   ltf: '5m',
   htf: '1h',
@@ -369,6 +402,9 @@ export interface Signal {
   plans?: Record<ExitPlanId, PlanLevels>; // the four exit plans the exit lab follows
   exitPlan?: ExitPlanId; // which plan this trade actually uses (A unless another one proved better)
   beAtR?: number; // break-even rule of the plan in use
+  entryMode?: EntryMode; // LIMIT = wait for the pullback price below (above) the close
+  limit?: { price: number; bars: number }; // the limit price the entry lab tests for this setup
+  marketEntry?: number; // limit-mode trades: the close at the signal (the market entry)
 }
 
 export type EntryStatus = 'ACTIVE' | 'FILTERED' | 'PAUSED';
@@ -390,4 +426,9 @@ export interface JournalEntry {
   archived?: boolean; // rebuilt from the compact learning archive (no write-up or chart levels)
   filterBits?: { pass: number; known: number }; // filter-lab results kept in the digest (bit i = FILTERS[i])
   be?: boolean; // the trade's own break-even stop is armed
+  peak?: number; // the trade's furthest move in favour (R), for its time stop / trail
+  part?: number; // R banked by the trade's own partial exit
+  filledAt?: number; // limit-mode trades: candle the limit order filled on
+  missed?: boolean; // limit-mode trade whose order never filled (counted as 0R)
+  entryAlt?: EntryAlt; // entry lab: the other way in
 }

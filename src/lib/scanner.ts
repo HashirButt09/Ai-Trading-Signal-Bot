@@ -61,6 +61,8 @@ export class Scanner {
   /** the server's compact archive of older closed trades */
   archive: Rec[] = [];
   private av = -1;
+  /** your "I took it" (1) / "Skipped" (0) marks on shown signals, by signal id */
+  took: Record<string, [number, number]> = {};
   /** everything learning and the stats pages use: archive + live journal */
   get history(): JournalEntry[] {
     return this.archive.length ? history(this.archive, this.journal, this.settings) : this.journal;
@@ -202,6 +204,7 @@ export class Scanner {
       this.journal = r.journal;
       if (r.archive) this.archive = r.archive; // otherwise unchanged since our copy
       if (r.av !== undefined) this.av = r.av;
+      if (r.took) this.took = r.took;
       this.model = r.model ?? null;
       this.ver = r.status.ver;
       this.health = playbookHealth(this.history, this.settings);
@@ -231,6 +234,25 @@ export class Scanner {
       this.server = { ...this.server, error: '' };
     } catch (e: any) {
       this.server = { ...this.server, error: `Could not save settings to the server: ${e?.message ?? e}` };
+    }
+    this.emit();
+  }
+
+  /** mark a shown signal as taken (1), skipped (0) or clear the mark (null) */
+  async markTook(id: string, mark: 1 | 0 | null) {
+    const before = this.took;
+    const next = { ...this.took };
+    if (mark === null) delete next[id];
+    else next[id] = [mark, Date.now()];
+    this.took = next;
+    this.emit();
+    if (!this.remote) return;
+    try {
+      const r = await postState(this.settings.reviewPasscode, { action: 'took', id, mark });
+      if ((r as any)?.took) this.took = (r as any).took;
+    } catch (e: any) {
+      this.took = before;
+      this.server = { ...this.server, error: `Could not save your mark: ${e?.message ?? e}` };
     }
     this.emit();
   }

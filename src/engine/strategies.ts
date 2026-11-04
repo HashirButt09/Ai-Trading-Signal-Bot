@@ -1,4 +1,4 @@
-import { DEFAULT_TUNE, EXIT_PLANS, type Candle, type ExitPlanId, type Features, type MarketCtx, type PlanLevels, type Regime, type Settings, type Side, type Signal, type StrategyId, type Tune } from './types.js';
+import { DEFAULT_TUNE, EXIT_PLANS, LIMIT_BARS, LIMIT_PULLBACK_R, type Candle, type ExitPlanId, type Features, type MarketCtx, type PlanLevels, type Regime, type Settings, type Side, type Signal, type StrategyId, type Tune } from './types.js';
 import { atr, ema, sma } from './indicators.js';
 import { type HtfCtx, htfIndexAt, regimeAt } from './regime.js';
 import { planRisk } from './risk.js';
@@ -631,7 +631,9 @@ function ema200Bounce(side: Side, L: LtfCtx, i: number, tpR: number): Raw | null
 
 /**
  * Exit lab targets: A the playbook's own, B 2R, C the nearest confirmed swing level beyond entry
- * (1.2R - 4R, else A), D break-even at +1R then 2R. Uses only candles up to i.
+ * (1.2R - 4R, else A), D break-even at +1R then 2R, E A's target with a time stop (out after 12 candles
+ * unless it has been +0.5R), F half off at +1R, then the rest trails 1R behind the best price (capped at
+ * 3R or A's target). Uses only candles up to i.
  */
 export function exitPlans(L: LtfCtx, i: number, side: Side, entry: number, sl: number, tpA: number): Record<ExitPlanId, PlanLevels> {
   const c = L.candles;
@@ -647,7 +649,15 @@ export function exitPlans(L: LtfCtx, i: number, side: Side, entry: number, sl: n
     const r = (long ? lvl - entry : entry - lvl) / risk;
     if (r >= 1.2 && r <= 4 && (!Number.isFinite(tpC) || (long ? lvl < tpC : lvl > tpC))) tpC = lvl;
   }
-  return { A: { tp: tpA }, B: { tp: at(2) }, C: { tp: Number.isFinite(tpC) ? tpC : tpA }, D: { tp: at(2), beAtR: 1 } };
+  const rA = Math.abs(tpA - entry) / (risk || 1e-12);
+  return {
+    A: { tp: tpA },
+    B: { tp: at(2) },
+    C: { tp: Number.isFinite(tpC) ? tpC : tpA },
+    D: { tp: at(2), beAtR: 1 },
+    E: { tp: tpA, timeBars: 12, timeMinR: 0.5 },
+    F: { tp: at(Math.max(3, rA)), partialAtR: 1, trailR: 1 }
+  };
 }
 void EXIT_PLANS;
 
@@ -995,7 +1005,9 @@ export function evaluate(
     ...(raw.pattern ? { pattern: raw.pattern, patternTf: raw.patternTf ?? settings.ltf } : {}),
     ...(raw.drawing ? { drawing: raw.drawing } : {}),
     plans: exitPlans(L, i, raw.side, raw.entry, raw.sl, raw.tp),
-    exitPlan: 'A'
+    exitPlan: 'A',
+    // entry lab: the pullback limit price this setup is also tested with
+    limit: { price: raw.side === 'LONG' ? raw.entry - LIMIT_PULLBACK_R * Math.abs(raw.entry - raw.sl) : raw.entry + LIMIT_PULLBACK_R * Math.abs(raw.entry - raw.sl), bars: LIMIT_BARS }
   };
   return { regime, adx: ri.adx, signal };
 }

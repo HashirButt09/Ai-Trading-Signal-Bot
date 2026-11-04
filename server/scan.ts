@@ -1,12 +1,12 @@
 import type { Candle, JournalEntry, Settings, Signal } from '../src/engine/types.js';
 import { buildHtf } from '../src/engine/regime.js';
 import { buildLtf, evaluate, WARMUP } from '../src/engine/strategies.js';
-import { advanceEntry, applyExitPlan, btcFilter, clusters, exitReport, gate, isTracking, newEntry, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
+import { advanceEntry, applyExitPlan, applyLimitEntry, btcFilter, clusters, entryReport, exitReport, gate, isTracking, newEntry, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
 import { buildDigest, decodeLite, encodeLite, splitFinished, type Lite } from '../src/engine/archive.js';
 import { blockedBy, learnFilters, riskBlock } from '../src/engine/filters.js';
 import { coinGroup } from '../src/engine/flow.js';
 import { maintain, MAINT_EVERY_MS } from './maintain.js';
-import type { ExitPlanId, MarketCtx } from '../src/engine/types.js';
+import type { EntryMode, ExitPlanId, MarketCtx } from '../src/engine/types.js';
 import { PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type StrategyId } from '../src/engine/types.js';
 import { TF_MS } from '../src/engine/time.js';
 import { playName } from '../src/engine/names.js';
@@ -42,10 +42,17 @@ const HTF_LIMIT = 300;
 
 const fmt = (p: number) => (p >= 100 ? p.toFixed(2) : p >= 1 ? p.toFixed(4) : p.toPrecision(4));
 
+/** "LIMIT buy at X, valid 15 min" for limit-entry signals */
+export function limitText(s: Signal): string | null {
+  if (s.entryMode !== 'LIMIT') return null;
+  const mins = Math.round(((s.limit?.bars ?? 3) * (TF_MS[s.ltf] ?? 300_000)) / 60_000);
+  return `Place a LIMIT ${s.side === 'LONG' ? 'buy' : 'sell'} at ${fmt(s.entry)}, valid ${mins} min (cancel if not filled)`;
+}
+
 export function pushText(s: Signal): PushPayload {
   return {
     title: `${s.side} ${s.symbol} ${s.leverage}x (${s.ltf})`,
-    body: `${playName(s)} · Entry ${fmt(s.entry)} · SL ${fmt(s.sl)} · TP ${fmt(s.tp)} · ${s.rr.toFixed(2)}R${s.pWin !== undefined ? ` · AI ${(s.pWin * 100).toFixed(0)}%` : ''}`,
+    body: `${playName(s)} · ${limitText(s) ?? `Entry ${fmt(s.entry)}`} · SL ${fmt(s.sl)} · TP ${fmt(s.tp)} · ${s.rr.toFixed(2)}R${s.pWin !== undefined ? ` · AI ${(s.pWin * 100).toFixed(0)}%` : ''}`,
     tag: s.id,
     url: `/?signal=${encodeURIComponent(s.id)}`
   };
@@ -152,6 +159,8 @@ async function scanProfile(
   let health = playbookHealth(hist(), s);
   // exit lab: which exit plan each playbook uses for new trades (A unless another plan proved better)
   const exitChoice = Object.fromEntries(Object.keys(health).map((k) => [k, exitReport(hist(), k as StrategyId, s).choice])) as Record<StrategyId, ExitPlanId>;
+  // entry lab: market or limit (pullback) entries for new trades, per playbook
+  const entryChoice = Object.fromEntries(Object.keys(health).map((k) => [k, entryReport(hist(), k as StrategyId, s).choice])) as Record<StrategyId, EntryMode>;
   const liveBefore = new Set(Object.values(health).filter((h) => PROBATION.has(h.strategy) && !h.learning).map((h) => h.strategy));
   const btcState = btcFilter(hist(), s);
   // filter lab: which trader's filters have proven themselves for which playbook
@@ -202,7 +211,7 @@ async function scanProfile(
     // open trades whose last applied candle is older than the history we fetched cannot be verified: drop
     // them (a closed trade whose exit-lab plans cannot be finished just leaves the exit lab)
     const stale = (e: JournalEntry) => isOpen(e) && (e.lastT ?? e.signal.time) + step < L[0].t;
-    journal = journal.filter((e) => !(stale(e) && e.outcome === 'OPEN')).map((e) => (stale(e) ? { ...e, exits: undefined } : e));
+    journal = journal.filter((e) => !(stale(e) && e.outcome === 'OPEN')).map((e) => (stale(e) ? { ...e, exits: undefined, entryAlt: undefined } : e));
 
     // first index that is new for signal search (first ever run: only the latest closed candle)
     const firstNew = last ? L.findIndex((k) => k.t > last) : L.length - 1;
@@ -291,6 +300,7 @@ async function scanProfile(
       if (!r.signal || ids.has(r.signal.id)) continue;
       const plan = exitChoice[r.signal.strategy] ?? 'A';
       if (plan !== 'A') r.signal = applyExitPlan(r.signal, plan);
+      if (entryChoice[r.signal.strategy] === 'LIMIT') r.signal = applyLimitEntry(r.signal);
       if (openHere.some((e) => e.signal.strategy === r.signal!.strategy)) continue;
       let g = gate(r.signal, model, health, s, btcState);
       if (g.status === 'ACTIVE') {

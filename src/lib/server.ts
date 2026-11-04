@@ -28,6 +28,7 @@ export interface StateResponse {
   model?: MetaModel | null;
   archive?: Rec[]; // compact closed trades (weeks of history); only sent when it changed
   av?: number; // archive version
+  took?: Record<string, [number, number]>; // your "I took it" (1) / "Skipped" (0) marks by signal id
 }
 
 export class ServerError extends Error {

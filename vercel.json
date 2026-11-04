@@ -14,6 +14,9 @@
     },
     "api/agent.ts": {
       "maxDuration": 60
+    },
+    "api/daily.ts": {
+      "maxDuration": 60
     }
   },
   "rewrites": [
@@ -30,6 +33,58 @@
     {
       "path": "/api/agent?profile=15m",
       "schedule": "47 6 * * *"
+    },
+    {
+      "path": "/api/daily?job=morning",
+      "schedule": "11 3 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=0",
+      "schedule": "37 0 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=2",
+      "schedule": "37 2 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=4",
+      "schedule": "41 4 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=6",
+      "schedule": "37 6 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=8",
+      "schedule": "37 8 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=10",
+      "schedule": "37 10 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=12",
+      "schedule": "37 12 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=14",
+      "schedule": "37 14 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=16",
+      "schedule": "37 16 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=18",
+      "schedule": "37 18 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=20",
+      "schedule": "37 20 * * *"
+    },
+    {
+      "path": "/api/daily?job=watch&h=22",
+      "schedule": "37 22 * * *"
     }
   ]
 }

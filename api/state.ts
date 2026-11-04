@@ -17,6 +17,16 @@ import { history } from '../src/engine/archive.js';
 import { vapidReady } from '../server/push.js';
 
 const MAX_BODY = 4_000_000;
+const TOOK_KEEP = 1500;
+type Took = Record<string, [number, number]>; // signal id -> [1 took / 0 skipped, when]
+function parseTook(raw: unknown): Took {
+  try {
+    const o = JSON.parse(String(raw ?? '{}'));
+    return o && typeof o === 'object' ? o : {};
+  } catch {
+    return {};
+  }
+}
 
 function kvOr503(): Kv | Response {
   const cfg = kvConfig();
@@ -50,7 +60,8 @@ export async function GET(req: Request): Promise<Response> {
     const av = status.av?.[profile] ?? 0;
     const sendArchive = q.get('av') !== String(av);
     const all = await loadAll(kv, profile, { archive: sendArchive, recent: 600 });
-    return json({ ...base, profile, status: all.status, settings: all.settings, journal: all.journal, model: all.model, av, ...(sendArchive ? { archive: all.archive } : {}) });
+    const took = parseTook(await kv.cmd('GET', K.took));
+    return json({ ...base, profile, status: all.status, settings: all.settings, journal: all.journal, model: all.model, av, took, ...(sendArchive ? { archive: all.archive } : {}) });
   } catch (e: any) {
     return json({ error: `Server storage error: ${e?.message ?? e}` }, 500);
   }
@@ -85,6 +96,18 @@ export async function POST(req: Request): Promise<Response> {
     body = JSON.parse(raw);
   } catch {
     return json({ error: 'Invalid JSON.' }, 400);
+  }
+
+  // "I took it" / "Skipped" marks on shown signals (small, no scanner lock needed)
+  if (body?.action === 'took') {
+    const id = typeof body.id === 'string' && body.id.length < 120 ? body.id : '';
+    if (!id) return json({ error: 'Missing signal id.' }, 400);
+    const marks = parseTook(await kv.cmd('GET', K.took));
+    if (body.mark === 1 || body.mark === 0) marks[id] = [body.mark, Date.now()];
+    else delete marks[id];
+    const keep = Object.entries(marks).sort((a, b) => b[1][1] - a[1][1]).slice(0, TOOK_KEEP);
+    await kv.cmd('SET', K.took, JSON.stringify(Object.fromEntries(keep)));
+    return json({ ok: true, took: Object.fromEntries(keep) });
   }
 
   const lock = await acquireLock(kv, 30, 9000);

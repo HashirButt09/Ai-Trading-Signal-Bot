@@ -129,12 +129,13 @@ ok(new Set(journal.map((e) => e.signal.id)).size === journal.length, 'no duplica
 // every resolved trade must match a full candle-by-candle replay (including those spanning the outage)
 let match = 0;
 for (const e of done) {
-  let ref: any = { ...e, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: undefined, resolvedAt: undefined, be: undefined, exits: undefined, mfeR: undefined, maeR: undefined };
+  let ref: any = { ...e, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: undefined, resolvedAt: undefined, be: undefined, peak: undefined, part: undefined, filledAt: undefined, missed: undefined, entryAlt: undefined, exits: undefined, mfeR: undefined, maeR: undefined };
   for (const k of market[e.signal.symbol].m5) {
     ref = advanceEntry(ref, k, settings);
     if (ref.outcome !== 'OPEN') break;
   }
   if (ref.outcome === e.outcome && Math.abs(ref.rNet - e.rNet) < 1e-9 && ref.resolvedAt === e.resolvedAt) match++;
+  else if (process.env.DBG) console.log('MISMATCH', e.signal.id, e.signal.exitPlan, e.signal.entryMode, e.outcome, e.rNet, e.resolvedAt, '| ref', ref.outcome, ref.rNet, ref.resolvedAt, e.barsOpen, ref.barsOpen);
 }
 ok(done.length > 10 && match === done.length, `resolved outcomes match a full replay (${match}/${done.length})`);
 const spanning = done.filter((e) => e.signal.time < outageStart && (e.resolvedAt ?? 0) > outageStart);

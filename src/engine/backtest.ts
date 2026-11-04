@@ -59,6 +59,11 @@ export function runBacktest(symbol: string, ltfCandles: Candle[], htfCandles: Ca
       if (!isTracking(e)) break;
     }
     if (e.outcome === 'OPEN') break; // ran out of data - ignore unresolved trade
+    if (isTracking(e)) {
+      // out of data while some lab plan was still running: leave those plans out (never guess a result)
+      const exits = e.exits ? Object.fromEntries(Object.entries(e.exits).filter(([, st]) => st && st.outcome !== 'OPEN')) : undefined;
+      e = { ...e, exits, ...(e.entryAlt?.outcome === 'OPEN' ? { entryAlt: undefined } : {}) };
+    }
     j = exit;
     trades.push({ entry: e, exitIdx: j, pnlUsd: e.rNet * rUsd(e.signal) });
     busyUntil = j;
