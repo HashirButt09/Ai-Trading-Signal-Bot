@@ -1,3 +1,4 @@
+import { MECHANICS } from './legacy';
 import { computeProgress, computeVerdict, computeWeeklySummary, WEEK_MS } from '../src/engine/progress.js';
 import { trainingSet, playbookHealth } from '../src/engine/journal.js';
 import { retrainGated, liveAccuracy } from '../src/engine/learner.js';
@@ -220,7 +221,7 @@ function fakeTrade(
 {
   // Create 50 trades before cutoff, and 45 trades after cutoff
   const CUTOFF = 1793694732000; // Deploy time of commit 7ddaa87
-  const settings: Settings = { ...DEFAULT_SETTINGS, ignoreBefore: CUTOFF };
+  const settings: Settings = { ...DEFAULT_SETTINGS, ...MECHANICS, ignoreBefore: CUTOFF };
 
   const allTrades: JournalEntry[] = [];
   for (let i = 0; i < 50; i++) {
@@ -316,7 +317,7 @@ function fakeTrade(
   for (let i = 0; i < 23; i++) trades.push(fakeTrade(`m-l-${i}`, MONDAY_TS - 3 * 86_400_000, 'ACTIVE', -(19 * 0.5 - 3.1) / 23));
   for (let i = 0; i < 10; i++) trades.push(fakeTrade(`m-f-${i}`, MONDAY_TS - 3 * 86_400_000, 'FILTERED', 0.074 - 0.4));
 
-  await kv.cmd('SET', K.settings, JSON.stringify({ ...DEFAULT_SETTINGS, agentEnabled: true, ignoreBefore: 0, watchlist: ['BTCUSDT'] }));
+  await kv.cmd('SET', K.settings, JSON.stringify({ ...DEFAULT_SETTINGS, ...MECHANICS, agentEnabled: true, ignoreBefore: 0, watchlist: ['BTCUSDT'] }));
   await kv.cmd('SET', K.journal, JSON.stringify(trades));
 
   // Run agent on Monday

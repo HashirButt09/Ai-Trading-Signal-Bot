@@ -1,4 +1,5 @@
 // Exit lab (four exits on every trade) and the learning archive (weeks of history in little space).
+import { MECHANICS } from './legacy';
 import { DEFAULT_SETTINGS, type Candle, type JournalEntry, type Settings, type StrategyId } from '../src/engine/types';
 import { TF_MS } from '../src/engine/time';
 import { advanceEntry, applyExitPlan, exitReport, isTracking, newEntry, playbookHealth } from '../src/engine/journal';
@@ -12,7 +13,7 @@ import { MAIN } from '../src/engine/profiles';
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log(`${c ? 'PASS' : 'FAIL'}  ${m}`); if (!c) fails++; };
-const S: Settings = { ...DEFAULT_SETTINGS, ignoreFrom: 0, ignoreTo: 0, profiles: [], takerFee: 0, slippage: 0 };
+const S: Settings = { ...DEFAULT_SETTINGS, ...MECHANICS, ignoreFrom: 0, ignoreTo: 0, profiles: [], takerFee: 0, slippage: 0 };
 const T0 = Date.UTC(2026, 5, 1);
 const S5 = TF_MS['5m'];
 const k = (i: number, o: number, h: number, l: number, c: number): Candle => ({ t: T0 + i * S5, o, h, l, c, v: 1 });
@@ -155,7 +156,7 @@ function sig(strategy: StrategyId = 'TREND_FVG_RETEST', t = T0, symbol = 'XUSDT'
     return (iv === '5m' ? mkt[sym].m5 : mkt[sym].h1).filter((c) => c.t + TF_MS[iv] <= NOW).slice(-limit);
   };
   const kv = memoryKv();
-  await kv.cmd('SET', K.settings, JSON.stringify({ ...DEFAULT_SETTINGS, ignoreFrom: 0, ignoreTo: 0, profiles: [], watchlist: PAIRS, metaMinSamples: 30 }));
+  await kv.cmd('SET', K.settings, JSON.stringify({ ...DEFAULT_SETTINGS, ...MECHANICS, ignoreFrom: 0, ignoreTo: 0, profiles: [], watchlist: PAIRS, metaMinSamples: 30 }));
   await kv.cmd('SET', K.cursor, JSON.stringify(Object.fromEntries(PAIRS.map((p) => [`${p}|5m`, NOW - 400 * S5]))));
   let ctxCalls = 0;
   const market = async (syms: string[]) => (ctxCalls++, Object.fromEntries(syms.map((x) => [x, { funding: 0.0001, oiChg: 0.002 }])));

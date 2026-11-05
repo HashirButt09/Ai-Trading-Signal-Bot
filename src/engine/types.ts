@@ -231,7 +231,10 @@ export interface Settings {
   profiles: ProfileCfg[]; // extra timeframe bots beside the main one
   dailyLossLimitR: number; // no new signals for the rest of the UTC day after the shown signals lost this many R (0 = off)
   maxPerGroup: number; // open signals at once per coin group (majors, memes, AI, ...; 0 = no limit)
-  equityCurveFilter: boolean; // cool a playbook off while its last 10 results average below -0.5R
+  equityCurveFilter: boolean;
+  maxSameSide: number; // signals in the same direction (all coins) opened within the last 6 candles (0 = no limit)
+  profitOnly: boolean; // only send strategies whose recent results are profitable; they come back by themselves
+  trendOnly: boolean; // no trades against a trending higher timeframe unless the strategy proved it can // cool a playbook off while its last 10 results average below -0.5R
   editedAt: number; // when settings were last changed on this device (newer side wins when syncing)
 }
 
@@ -359,6 +362,9 @@ export const DEFAULT_SETTINGS: Settings = {
   dailyLossLimitR: 3,
   maxPerGroup: 2,
   equityCurveFilter: true,
+  maxSameSide: 2,
+  profitOnly: true,
+  trendOnly: true,
   editedAt: 0
 };
 

@@ -3,7 +3,7 @@ import { buildHtf } from '../src/engine/regime.js';
 import { buildLtf, evaluate, WARMUP } from '../src/engine/strategies.js';
 import { advanceEntry, applyExitPlan, applyLimitEntry, btcFilter, clusters, entryReport, exitReport, gate, isTracking, newEntry, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
 import { buildDigest, decodeLite, encodeLite, splitFinished, type Lite } from '../src/engine/archive.js';
-import { blockedBy, learnFilters, riskBlock } from '../src/engine/filters.js';
+import { blockedBy, counterTrend, counterTrendProven, gateBlock, learnFilters, profitGate, riskBlock, sameSideCount } from '../src/engine/filters.js';
 import { coinGroup } from '../src/engine/flow.js';
 import { maintain, MAINT_EVERY_MS } from './maintain.js';
 import type { EntryMode, ExitPlanId, MarketCtx } from '../src/engine/types.js';
@@ -165,6 +165,9 @@ async function scanProfile(
   const btcState = btcFilter(hist(), s);
   // filter lab: which trader's filters have proven themselves for which playbook
   const lab = learnFilters(hist(), s);
+  // profit gate (only strategies that are making money lately) and the trend rule, re-judged every scan
+  const pgate = profitGate(hist(), s);
+  const ctOk = counterTrendProven(hist(), s);
   // account risk: today's result of the signals you were shown, and each playbook's last 10 results
   const dayStart = Math.floor(now / 86_400_000) * 86_400_000;
   const todayR = () => hist().filter((e) => e.status === 'ACTIVE' && !e.seed && e.outcome !== 'OPEN' && (e.resolvedAt ?? 0) >= dayStart).reduce((a, e) => a + e.rNet, 0);
@@ -307,6 +310,11 @@ async function scanProfile(
         const f = blockedBy(r.signal, lab);
         if (f) g = { ...g, status: 'FILTERED', reason: `learned filter: ${f.label}` };
         else if (cooling.has(r.signal.strategy)) g = { ...g, status: 'FILTERED', reason: 'cooling off: its last 10 results averaged below -0.5R' };
+        else if (s.trendOnly && counterTrend(r.signal) && !ctOk.has(r.signal.strategy)) g = { ...g, status: 'FILTERED', reason: 'trend rule: against the higher-timeframe trend' };
+        else if (s.profitOnly) {
+          const why = gateBlock(r.signal, pgate);
+          if (why) g = { ...g, status: 'FILTERED', reason: why };
+        }
       }
       r.signal.pWin = g.pWin;
       setupsAtT.push({ signal: r.signal, g, k });
@@ -343,7 +351,9 @@ async function scanProfile(
         item.signal.scenario = (item.signal.scenario ? item.signal.scenario + ' · ' : '') + why;
       };
       const why = riskBlock(s, dayR, grp, groupOpen.get(grp) ?? 0, taken, availableSlots);
+      const same = s.maxSameSide > 0 ? sameSideCount(journal, item.signal.side, item.k.t, step) : 0;
       if (why) note(why);
+      else if (s.maxSameSide > 0 && same >= s.maxSameSide) note(`same-direction cap: already ${same} ${item.signal.side} signals in the last 6 candles (one market move)`);
       if (status === 'ACTIVE') {
         taken++;
         groupOpen.set(grp, (groupOpen.get(grp) ?? 0) + 1);

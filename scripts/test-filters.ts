@@ -1,7 +1,7 @@
 // Filter lab (trader's filters that switch themselves on only when they prove useful), US news
 // calendar, and the account risk rules (daily loss limit, coin-group cap).
 import { DEFAULT_SETTINGS, EXTRA_KEYS, type JournalEntry, type Settings, type StrategyId } from '../src/engine/types';
-import { blockedBy, etToUtc, filterBits, FILTER_MIN, FILTERS, learnFilters, nearNews, NEWS_EVENTS, riskBlock } from '../src/engine/filters';
+import { blockedBy, counterTrend, counterTrendProven, etToUtc, filterBits, FILTER_MIN, FILTERS, gateBlock, learnFilters, nearNews, NEWS_EVENTS, profitGate, riskBlock, sameSideCount } from '../src/engine/filters';
 import { newEntry } from '../src/engine/journal';
 import { coinGroup } from '../src/engine/flow';
 
@@ -90,6 +90,48 @@ const closed = (strategy: StrategyId, t: number, ex: number[] | undefined, r: nu
   ok(riskBlock(S, 0, 'other', 9, 0, 3) === null, 'coins without a known group are not capped together');
   ok(riskBlock(S, 0, 'l1', 0, 3, 3)?.startsWith('max open') === true, 'open-trade slots still apply');
   ok(coinGroup('1000PEPEUSDT') === 'meme' && coinGroup('ETHUSDT') === 'major' && coinGroup('FOOUSDT') === 'other', 'coin groups');
+}
+
+// ---------- profit gate: blocks losers, lets them back when they recover ----------
+{
+  const mk = (st: StrategyId, i: number, r: number, regime = 'TREND_BULL', side: 'LONG' | 'SHORT' = 'LONG') => {
+    const e = closed(st, T0 + i * 7_200_000, extra(), r);
+    return { ...e, signal: { ...e.signal, regime, side } } as JournalEntry;
+  };
+  const list: JournalEntry[] = [];
+  for (let i = 0; i < 60; i++) list.push(mk('CIPHER_B', i, i % 3 === 0 ? 1.5 : -1)); // 33% at 1.5R = losing
+  for (let i = 0; i < 60; i++) list.push(mk('XABC_FIB', i, i % 2 === 0 ? 1.6 : -1)); // 50% at 1.6R = winning
+  for (let i = 0; i < 10; i++) list.push(mk('SMC_CHOCH_FVG', i, 2));
+  let g = profitGate(list, S);
+  ok(!g.CIPHER_B!.allowed && g.XABC_FIB!.allowed, 'losing strategy blocked, profitable one allowed');
+  ok(!g.SMC_CHOCH_FVG!.allowed && g.SMC_CHOCH_FVG!.why.includes('proving'), 'too few results: has to prove itself first (still tracked)');
+  ok(gateBlock(sig('CIPHER_B', T0, extra()) as any, g)!.startsWith('profit gate') && gateBlock(sig('XABC_FIB', T0, extra()) as any, g) === null, 'only allowed strategies reach you');
+  // Cipher B recovers: its newest 60 results are profitable -> unblocked by itself
+  const rec = [...list];
+  for (let i = 60; i < 110; i++) rec.push(mk('CIPHER_B', i, i % 2 === 0 ? 1.5 : -1));
+  g = profitGate(rec, S);
+  ok(g.CIPHER_B!.allowed && g.CIPHER_B!.n === 60, `recovered strategy comes back automatically (${g.CIPHER_B!.avgR.toFixed(2)}R over its last 60)`);
+  // XABC starts losing -> stopped by itself
+  const worse = [...list];
+  for (let i = 60; i < 100; i++) worse.push(mk('XABC_FIB', i, -1));
+  ok(!profitGate(worse, S).XABC_FIB!.allowed, 'a strategy that starts losing is stopped automatically');
+  // 10 coins on one candle count as one result
+  const herd: JournalEntry[] = [];
+  for (let i = 0; i < 30; i++) for (let c = 0; c < 10; c++) herd.push({ ...mk('VWAP_RECLAIM', i, i < 5 ? 2 : -1), signal: { ...mk('VWAP_RECLAIM', i, 0).signal, symbol: `C${c}USDT` } } as JournalEntry);
+  ok(profitGate(herd, S).VWAP_RECLAIM!.n === 30, 'one market move on many coins counts once');
+  ok(profitGate([...list, { ...mk('CHART_WEDGE', 1, 9), seed: true } as JournalEntry], S).CHART_WEDGE === undefined, 'backtest results do not unlock live signals');
+
+  // trend rule
+  ok(counterTrend(mk('CIPHER_B', 0, 0, 'TREND_BEAR', 'LONG').signal) && !counterTrend(mk('CIPHER_B', 0, 0, 'TREND_BEAR', 'SHORT').signal) && !counterTrend(mk('CIPHER_B', 0, 0, 'RANGE', 'LONG').signal), 'counter-trend = long in a downtrend / short in an uptrend (ranges are fine)');
+  const ct: JournalEntry[] = [];
+  for (let i = 0; i < 30; i++) ct.push(mk('RANGE_SWEEP_RECLAIM', i, i % 2 ? 2 : -1, 'TREND_BEAR', 'LONG'));
+  for (let i = 0; i < 30; i++) ct.push(mk('CANDLE_REVERSAL', i, i % 3 ? -1 : 1.5, 'TREND_BEAR', 'LONG'));
+  const okSet = counterTrendProven(ct, S);
+  ok(okSet.has('RANGE_SWEEP_RECLAIM') && !okSet.has('CANDLE_REVERSAL'), 'counter-trend allowed only for a strategy that proved it can');
+
+  // same-direction cap
+  const j = [0, 1, 2].map((i) => ({ ...newEntry(sig('CIPHER_B', T0 + i * 300_000, extra()) as any, 'ACTIVE') }));
+  ok(sameSideCount(j, 'LONG', T0 + 3 * 300_000, 300_000) === 3 && sameSideCount(j, 'SHORT', T0 + 3 * 300_000, 300_000) === 0 && sameSideCount(j, 'LONG', T0 + 9 * 300_000, 300_000) === 0, 'same-direction cap counts the last 6 candles only');
 }
 
 console.log(fails ? `\n${fails} FAILED` : '\nAll filter-lab and risk checks passed');

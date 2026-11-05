@@ -172,3 +172,79 @@ export function riskBlock(s: Settings, dayR: number, group: string, openInGroup:
   if (taken >= slots) return 'max open trades / one new trade per candle';
   return null;
 }
+
+// ---------------- profit gate and trend rule ----------------
+
+export const GATE_MIN = 20; // independent results before a strategy can be judged at all
+export const GATE_WINDOW = 60; // judged on its newest 60 independent results
+export const GATE_ON_R = 0.05; // needs at least this average R (after fees) to send you signals
+
+export interface GateRow {
+  strategy: StrategyId;
+  n: number; // independent results in the window
+  avgR: number;
+  allowed: boolean;
+  why: string;
+}
+
+/** one result per market move (same candle + side), newest last */
+function moves(list: JournalEntry[], s: Settings, keep: (e: JournalEntry) => boolean): Map<StrategyId, number[]> {
+  const g = new Map<string, { st: StrategyId; t: number; r: number; n: number }>();
+  for (const e of list) {
+    if (e.outcome === 'OPEN' || e.seed || e.missed || isIgnored(e, s) || !keep(e)) continue;
+    const k = `${e.signal.strategy}|${e.signal.time}|${e.signal.side}`;
+    const x = g.get(k) ?? { st: e.signal.strategy, t: e.resolvedAt ?? e.signal.time, r: 0, n: 0 };
+    x.r += e.rNet;
+    x.n++;
+    x.t = Math.max(x.t, e.resolvedAt ?? e.signal.time);
+    g.set(k, x);
+  }
+  const out = new Map<StrategyId, { t: number; r: number }[]>();
+  for (const x of g.values()) out.set(x.st, [...(out.get(x.st) ?? []), { t: x.t, r: x.r / x.n }]);
+  return new Map([...out.entries()].map(([k, xs]) => [k, xs.sort((a, b) => a.t - b.t).map((x) => x.r)]));
+}
+
+/**
+ * Profit gate: a strategy sends you signals only while its newest 60 independent results (every setup
+ * the bot followed, shown or tracked silently) average at least +0.05R after fees. Blocked strategies
+ * keep being tracked, so a strategy that recovers is let through again by itself.
+ */
+export function profitGate(list: JournalEntry[], s: Settings): Partial<Record<StrategyId, GateRow>> {
+  const out: Partial<Record<StrategyId, GateRow>> = {};
+  moves(list, s, () => true).forEach((rs, k) => {
+    const w = rs.slice(-GATE_WINDOW);
+    const avg = w.reduce((a, b) => a + b, 0) / Math.max(1, w.length);
+    const allowed = w.length >= GATE_MIN && avg >= GATE_ON_R;
+    out[k] = {
+      strategy: k,
+      n: w.length,
+      avgR: avg,
+      allowed,
+      why: w.length < GATE_MIN ? `proving itself (${w.length}/${GATE_MIN} results)` : allowed ? 'profitable' : `not profitable lately (${avg.toFixed(2)}R over its last ${w.length})`
+    };
+  });
+  return out;
+}
+export function gateBlock(sig: Signal, gate: Partial<Record<StrategyId, GateRow>>): string | null {
+  const g = gate[sig.strategy];
+  if (!g) return `profit gate: ${sig.strategy} is proving itself (0/${GATE_MIN} results)`;
+  return g.allowed ? null : `profit gate: ${g.why}`;
+}
+
+/** against a trending higher timeframe (a range is neither with nor against) */
+export const counterTrend = (sig: Signal) => (sig.regime === 'TREND_BULL' && sig.side === 'SHORT') || (sig.regime === 'TREND_BEAR' && sig.side === 'LONG');
+
+/** strategies whose counter-trend trades have proven profitable on their own (25+ results, +0.05R) */
+export function counterTrendProven(list: JournalEntry[], s: Settings): Set<StrategyId> {
+  const ok = new Set<StrategyId>();
+  moves(list, s, (e) => counterTrend(e.signal)).forEach((rs, k) => {
+    const w = rs.slice(-GATE_WINDOW);
+    if (w.length >= 25 && w.reduce((a, b) => a + b, 0) / w.length >= GATE_ON_R) ok.add(k);
+  });
+  return ok;
+}
+
+/** same-direction cap: signals already shown on this side within the last 6 candles (all coins) */
+export function sameSideCount(journal: JournalEntry[], side: string, t: number, stepMs: number): number {
+  return journal.filter((e) => e.status === 'ACTIVE' && !e.seed && e.signal.side === side && e.signal.time > t - 6 * stepMs && e.signal.time <= t).length;
+}

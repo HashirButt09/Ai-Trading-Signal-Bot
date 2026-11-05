@@ -1,4 +1,5 @@
 // Learning-mode strategies, the learning BTC filter and self-retraining.
+import { MECHANICS } from './legacy';
 import { DEFAULT_SETTINGS, PROBATION, PROMOTE_MIN_TRADES, type Candle, type JournalEntry, type Settings, type StrategyId } from '../src/engine/types';
 import { TF_MS } from '../src/engine/time';
 import { buildLtf, evaluate, WARMUP } from '../src/engine/strategies';
@@ -14,7 +15,7 @@ import { history } from '../src/engine/archive';
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log(`${c ? 'PASS' : 'FAIL'}  ${m}`); if (!c) fails++; };
-const S: Settings = { ...DEFAULT_SETTINGS, ignoreFrom: 0, ignoreTo: 0, profiles: [] };
+const S: Settings = { ...DEFAULT_SETTINGS, ...MECHANICS, ignoreFrom: 0, ignoreTo: 0, profiles: [] };
 const NEW: StrategyId[] = ['BREAK_RETEST', 'VWAP_RECLAIM', 'ORDER_BLOCK', 'BB_SQUEEZE', 'DAY_SWEEP', 'RSI_DIVERGENCE', 'SESSION_ORB', 'DONCHIAN_BREAKOUT', 'EMA200_BOUNCE', 'SMC_CHOCH_FVG', 'CIPHER_B', 'XABC_FIB'];
 
 // ---------- synthetic market ----------

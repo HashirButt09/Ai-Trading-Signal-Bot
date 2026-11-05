@@ -1,4 +1,5 @@
 // Server-side always-on scanner: fake Binance + fake Upstash (via the real REST client) + fake push service.
+import { MECHANICS } from './legacy';
 import { DEFAULT_SETTINGS, PROBATION, type Candle } from '../src/engine/types';
 import { TF_MS } from '../src/engine/time';
 import { advanceEntry } from '../src/engine/journal';
@@ -71,7 +72,7 @@ const send = async (sub: PushSub, p: any) => {
 
 // these checks are about the established playbooks; the learning-mode ones have their own test file
 const OLD_ONLY = Object.fromEntries(Object.keys(DEFAULT_SETTINGS.enabled).map((k) => [k, !PROBATION.has(k as any)])) as typeof DEFAULT_SETTINGS.enabled;
-const settings = { ...DEFAULT_SETTINGS, enabled: OLD_ONLY, profiles: [], watchlist: ['AAAUSDT', 'BBBUSDT'], metaMinSamples: 30, telegramToken: 'tg', telegramChatId: '1', ignoreBefore: 0 };
+const settings = { ...DEFAULT_SETTINGS, ...MECHANICS, enabled: OLD_ONLY, profiles: [], watchlist: ['AAAUSDT', 'BBBUSDT'], metaMinSamples: 30, telegramToken: 'tg', telegramChatId: '1', ignoreBefore: 0 };
 await mem.cmd('SET', K.settings, JSON.stringify(settings));
 await setSub(kv, phone, ['AAAUSDT']); // bell on for AAA only
 await setSub(kv, oldTab, ['AAAUSDT', 'BBBUSDT']);
@@ -209,7 +210,7 @@ ok(!mem.data.has(K.lock), 'lock released after a failed tick');
   const symHigh = 'BTCUSDT';
   const symLow = 'DOGEUSDT';
 
-  const diffSettings = { ...DEFAULT_SETTINGS, enabled: OLD_ONLY, profiles: [], watchlist: [symHigh, symLow] };
+  const diffSettings = { ...DEFAULT_SETTINGS, ...MECHANICS, enabled: OLD_ONLY, profiles: [], watchlist: [symHigh, symLow] };
   await diffMem.cmd('SET', K.settings, JSON.stringify(diffSettings));
 
   // Use 1500 candles from market.AAAUSDT so H.length > 60 check in runScan passes
@@ -326,7 +327,7 @@ ok(!mem.data.has(K.lock), 'lock released after a failed tick');
   const fourPairs = ['P1USDT', 'P2USDT', 'P3USDT', 'P4USDT'];
   const guardMarket: Record<string, { m5: Candle[]; h1: Candle[] }> = {};
   for (const p of fourPairs) guardMarket[p] = market.AAAUSDT;
-  const guardSettings = { ...DEFAULT_SETTINGS, enabled: OLD_ONLY, profiles: [], watchlist: fourPairs, maxOpenTrades: 5, maxNewPerCandle: 1 };
+  const guardSettings = { ...DEFAULT_SETTINGS, ...MECHANICS, enabled: OLD_ONLY, profiles: [], watchlist: fourPairs, maxOpenTrades: 5, maxNewPerCandle: 1 };
   await guardMem.cmd('SET', K.settings, JSON.stringify(guardSettings));
 
   const targetSignalTime = bt.trades[0].entry.signal.time;
@@ -360,7 +361,7 @@ ok(!mem.data.has(K.lock), 'lock released after a failed tick');
     return { ok: true, status: 200, json: async () => result } as any;
   });
 
-  const cSettings = { ...DEFAULT_SETTINGS, enabled: OLD_ONLY, profiles: [], watchlist: ['AAAUSDT', 'BBBUSDT'], maxOpenTrades: 2, maxNewPerCandle: 1 };
+  const cSettings = { ...DEFAULT_SETTINGS, ...MECHANICS, enabled: OLD_ONLY, profiles: [], watchlist: ['AAAUSDT', 'BBBUSDT'], maxOpenTrades: 2, maxNewPerCandle: 1 };
   await testCMem.cmd('SET', K.settings, JSON.stringify(cSettings));
 
   const targetSignalTime = bt.trades[0].entry.signal.time;

@@ -1,5 +1,6 @@
 // The 15m / 4h bot runs beside the main 5m / 1h bot: own journal, model, health, cursors and agent,
 // shared settings. The main bot's stored data must stay exactly as it was.
+import { MECHANICS } from './legacy';
 import { DEFAULT_SETTINGS, type Candle, type JournalEntry, type Settings } from '../src/engine/types';
 import { TF_MS } from '../src/engine/time';
 import { memoryKv } from '../server/kv';
@@ -65,7 +66,7 @@ const send = async (_s: any, p: any) => (sent.push(p.title), 'ok' as const);
 
 const kv = memoryKv();
 const mem = (kv as any).data as Map<string, string>;
-const settings = { ...DEFAULT_SETTINGS, watchlist: PAIRS, metaMinSamples: 30, ignoreFrom: 0, ignoreTo: 0 };
+const settings = { ...DEFAULT_SETTINGS, ...MECHANICS, watchlist: PAIRS, metaMinSamples: 30, ignoreFrom: 0, ignoreTo: 0 };
 await kv.cmd('SET', K.settings, JSON.stringify(settings));
 
 // the main bot already has history (as in production)
@@ -171,7 +172,7 @@ ok(active15 <= settings.maxOpenTrades, `15m bot respects max open trades on its 
 {
   const akv = memoryKv();
   const amem = (akv as any).data as Map<string, string>;
-  const s0 = { ...DEFAULT_SETTINGS, watchlist: PAIRS, ignoreFrom: 0, ignoreTo: 0 };
+  const s0 = { ...DEFAULT_SETTINGS, ...MECHANICS, watchlist: PAIRS, ignoreFrom: 0, ignoreTo: 0 };
   await akv.cmd('SET', K.settings, JSON.stringify(s0));
   await akv.cmd('SET', K.agent, JSON.stringify({ runs: [{ at: 1, trigger: 'cron', decision: 'kept', summary: 'main run', notes: [] }], lastChange: null, paused: null, keptStreak: 0, noGain: 0 }));
   const end = market.AAAUSDT['5m'][market.AAAUSDT['5m'].length - 1].t;

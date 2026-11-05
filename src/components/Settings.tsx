@@ -131,12 +131,15 @@ export function Settings({ value, onChange, scanner }: { value: S; onChange: (s:
           {numField('maxNewPerCandle', 'Max new trades per candle', 1, 'Max new active trades on a single candle close')}
           {numField('dailyLossLimitR', 'Daily loss limit (R, 0 = off)', 0.5, 'After the signals you got lost this much today (UTC), new ones are only tracked until tomorrow')}
           {numField('maxPerGroup', 'Max open trades per coin group', 1, 'Majors, L1s, L2s, memes, AI, DeFi: coins that move together (0 = no limit)')}
+          {numField('maxSameSide', 'Max same-direction signals per 6 candles', 1, 'All coins together: many longs at once are one market move, not many trades (0 = no limit)')}
           {numField('tpR', 'Target for trend plays (R)', 0.1, 'Range plays always target the range midpoint')}
           {numField('minSlPct', 'Skip stops tighter than (%)', 0.01, undefined, 100)}
           {numField('takerFee', 'Taker fee per side (%)', 0.005, 'Binance futures default 0.04%', 100)}
           {numField('slippage', 'Slippage round trip (%)', 0.005, undefined, 100)}
         </div>
         <label className="check"><input type="checkbox" checked={value.equityCurveFilter} onChange={(e) => set('equityCurveFilter', e.target.checked)} /> Cool a playbook off while its last 10 results average below -0.5R (it keeps being tracked and comes back by itself)</label>
+        <label className="check"><input type="checkbox" checked={value.profitOnly} onChange={(e) => set('profitOnly', e.target.checked)} /> Only send strategies that are profitable lately (last 60 results average +0.05R or more after fees). Blocked ones keep being tracked and are let through again by themselves when they recover</label>
+        <label className="check"><input type="checkbox" checked={value.trendOnly} onChange={(e) => set('trendOnly', e.target.checked)} /> No trades against a trending higher timeframe, unless that strategy's counter-trend trades have proven profitable on their own</label>
       </div>
 
       <div className="card form">

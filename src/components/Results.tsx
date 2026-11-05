@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ALL_STRATEGIES, EXIT_LABEL, EXIT_PLANS, LIMIT_BARS, LIMIT_PULLBACK_R, PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type JournalEntry, type StrategyId } from '../engine/types';
 import { btcFilter, computeStats, entryReport, exitReport, independentCount } from '../engine/journal';
 import { Progress } from './Progress';
-import { FILTER_MIN, FILTERS, learnFilters } from '../engine/filters';
+import { FILTER_MIN, FILTERS, GATE_MIN, GATE_ON_R, GATE_WINDOW, learnFilters, profitGate } from '../engine/filters';
 import { isIgnored } from '../engine/types';
 import type { Scanner } from '../lib/scanner';
 import { localTime, num, pct } from '../lib/format';
@@ -44,6 +44,7 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
   const total = row(inView);
   const btc = btcFilter(all, s);
   const lab = useMemo(() => learnFilters(all, s), [all, s]);
+  const pg = useMemo(() => profitGate(all, s), [all, s]);
 
   const status = (k: StrategyId) => {
     const h = scanner.health[k];
@@ -164,6 +165,22 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
         </div>
         {list.length > 300 && <div className="muted small">Showing the newest 300.</div>}
         <div className="muted small">Tap a recent trade to open it on the chart with its full write-up. Older closed trades are kept as numbers only, for learning.</div>
+      </div>
+
+      <div className="card">
+        <div className="label">Profit gate: which strategies may send you signals</div>
+        <div className="muted small">
+          {s.profitOnly ? `A strategy sends you signals only while its newest ${GATE_WINDOW} independent results average at least +${GATE_ON_R}R after fees (it needs ${GATE_MIN} results first). Every setup keeps being tracked, so a blocked strategy that recovers is let through again by itself, and one that starts losing is stopped.` : 'Switched off in Settings: every strategy can send signals.'}
+        </div>
+        <div className="row gap wrap small" style={{ marginTop: 6 }}>
+          {ALL_STRATEGIES.map((k) => pg[k] ?? { strategy: k, n: 0, avgR: 0, allowed: false, why: 'no results yet' })
+            .sort((a, b) => Number(b.allowed) - Number(a.allowed) || b.avgR - a.avgR)
+            .map((g) => (
+              <span key={g.strategy} className="pill" title={g.why}>
+                <span className={g.allowed ? 'up-t' : 'muted'}>{g.allowed ? '✓' : '·'}</span> {STRATEGY_LABEL[g.strategy]} <span className={g.avgR >= 0 ? 'up-t' : 'down-t'}>{g.n ? `${num(g.avgR, 2)}R` : ''}</span> <span className="muted">{g.n}/{GATE_WINDOW}</span>
+              </span>
+            ))}
+        </div>
       </div>
 
       <div className="card">
