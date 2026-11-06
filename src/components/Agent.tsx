@@ -1,5 +1,5 @@
 import { genLive, specText, type InventorState } from '../engine/inventor';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Settings } from '../engine/types';
 import type { Scanner } from '../lib/scanner';
 import { agentGet, agentPost } from '../lib/server';
@@ -108,8 +108,7 @@ export function Agent({ scanner, settings, onChange }: { scanner: Scanner; setti
 
   const runs = data?.runs ?? [];
   const inv = data?.inventor;
-  const all = scanner.history;
-  const live = genLive(all, scanner.settings);
+  const live = useMemo(() => genLive(scanner.history, scanner.settings), [scanner.history, scanner.settings]);
   return (
     <div className="page" style={{ paddingBottom: 0 }}>
       <div className="card form">

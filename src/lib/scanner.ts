@@ -65,8 +65,15 @@ export class Scanner {
   took: Record<string, [number, number]> = {};
   /** everything learning and the stats pages use: archive + live journal */
   get history(): JournalEntry[] {
-    return this.archive.length ? history(this.archive, this.journal, this.settings) : this.journal;
+    if (!this.archive.length) return this.journal;
+    // decoding the archive is heavy: only redo it when the archive, journal or settings changed
+    const c = this.histCache;
+    if (c && c.a === this.archive && c.j === this.journal && c.s === this.settings) return c.out;
+    const out = history(this.archive, this.journal, this.settings);
+    this.histCache = { a: this.archive, j: this.journal, s: this.settings, out };
+    return out;
   }
+  private histCache: { a: Rec[]; j: JournalEntry[]; s: Settings; out: JournalEntry[] } | null = null;
   server: ServerView = { mode: 'off', error: '', info: null, checkedAt: 0 };
   private ver = -1;
   private priceTimer: ReturnType<typeof setInterval> | null = null;
