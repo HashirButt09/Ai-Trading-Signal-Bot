@@ -1,7 +1,7 @@
 import type { Candle, JournalEntry, Settings, Signal } from '../src/engine/types.js';
 import { buildHtf } from '../src/engine/regime.js';
 import { buildLtf, evaluate, WARMUP } from '../src/engine/strategies.js';
-import { advanceEntry, applyExitPlan, applyLimitEntry, btcFilter, clusters, entryReport, exitReport, gate, isTracking, newEntry, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
+import { advanceEntry, applyExitPlan, applyLimitEntry, applyStopWidth, stopChoices, btcFilter, clusters, entryReport, exitReport, gate, isTracking, newEntry, playbookHealth, resolved, retrain } from '../src/engine/journal.js';
 import { buildDigest, decodeLite, encodeLite, splitFinished, type Lite } from '../src/engine/archive.js';
 import { blockedBy, counterTrend, counterTrendProven, gateBlock, learnFilters, profitGate, riskBlock, sameSideCount } from '../src/engine/filters.js';
 import { coinGroup } from '../src/engine/flow.js';
@@ -160,6 +160,8 @@ async function scanProfile(
   // exit lab: which exit plan each playbook uses for new trades (A unless another plan proved better)
   const exitChoice = Object.fromEntries(Object.keys(health).map((k) => [k, exitReport(hist(), k as StrategyId, s).choice])) as Record<StrategyId, ExitPlanId>;
   // entry lab: market or limit (pullback) entries for new trades, per playbook
+  // stop lab: a wider stop (same target, same $ risk) for playbooks whose tight stops keep getting hunted
+  const stopChoice = stopChoices(hist(), s, Object.keys(health) as StrategyId[]);
   const entryChoice = Object.fromEntries(Object.keys(health).map((k) => [k, entryReport(hist(), k as StrategyId, s).choice])) as Record<StrategyId, EntryMode>;
   const liveBefore = new Set(Object.values(health).filter((h) => PROBATION.has(h.strategy) && !h.learning).map((h) => h.strategy));
   const btcState = btcFilter(hist(), s);
@@ -214,7 +216,7 @@ async function scanProfile(
     // open trades whose last applied candle is older than the history we fetched cannot be verified: drop
     // them (a closed trade whose exit-lab plans cannot be finished just leaves the exit lab)
     const stale = (e: JournalEntry) => isOpen(e) && (e.lastT ?? e.signal.time) + step < L[0].t;
-    journal = journal.filter((e) => !(stale(e) && e.outcome === 'OPEN')).map((e) => (stale(e) ? { ...e, exits: undefined, entryAlt: undefined } : e));
+    journal = journal.filter((e) => !(stale(e) && e.outcome === 'OPEN')).map((e) => (stale(e) ? { ...e, exits: undefined, entryAlt: undefined, stops: undefined } : e));
 
     // first index that is new for signal search (first ever run: only the latest closed candle)
     const firstNew = last ? L.findIndex((k) => k.t > last) : L.length - 1;
@@ -303,6 +305,8 @@ async function scanProfile(
       if (!r.signal || ids.has(r.signal.id)) continue;
       const plan = exitChoice[r.signal.strategy] ?? 'A';
       if (plan !== 'A') r.signal = applyExitPlan(r.signal, plan);
+      const sw = stopChoice[r.signal.strategy]?.choice;
+      if (sw && sw !== 'W10') r.signal = applyStopWidth(r.signal, sw, s);
       if (entryChoice[r.signal.strategy] === 'LIMIT') r.signal = applyLimitEntry(r.signal);
       if (openHere.some((e) => e.signal.strategy === r.signal!.strategy)) continue;
       let g = gate(r.signal, model, health, s, btcState);

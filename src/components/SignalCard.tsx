@@ -43,6 +43,11 @@ export function SignalCard({ entry, selected, onSelect, full, review, took }: { 
         <Num label={`TARGET ${s.rr.toFixed(2)}R`} v={fmtPrice(s.tp)} cls="up-t" />
         <Num label="LEVERAGE" v={`${s.leverage}x`} cls="amber" />
       </div>
+      {s.stopWidth && s.baseSl !== undefined && (
+        <div className="small muted">
+          Stop widened to {s.stopWidth === 'W15' ? '1.5x' : '2x'} (strategy's own stop was {fmtPrice(s.baseSl)}): the stop lab found tight stops kept getting hunted for this strategy. Leverage is lower, so a stop-out still loses the same $.
+        </div>
+      )}
       {s.entryMode === 'LIMIT' && (
         <div className="small amber">
           Place a LIMIT {long ? 'buy' : 'sell'} at {fmtPrice(s.entry)} (price at the signal was {fmtPrice(s.marketEntry ?? s.entry)}), valid {Math.round(((s.limit?.bars ?? 3) * (TF_MS[s.ltf] ?? 300_000)) / 60_000)} min. Cancel it if it has not filled by then. The entry lab found limit entries work better for this playbook.

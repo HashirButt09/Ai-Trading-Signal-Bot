@@ -7,7 +7,7 @@
  * the last 60 setups of every playbook (so learning-mode playbooks never lose their record), then the
  * newest of everything else until the size budget is used.
  */
-import { ALL_STRATEGIES, EXIT_PLANS, EXTRA_KEYS, type EntryAlt, type JournalEntry, type Outcome, type Regime, type Settings, type StrategyId } from './types.js';
+import { ALL_STRATEGIES, EXIT_PLANS, EXTRA_KEYS, STOP_WIDTHS, type EntryAlt, type JournalEntry, type Outcome, type Regime, type Settings, type StrategyId } from './types.js';
 import { calendar, COIN_GROUPS } from './flow.js';
 import { filterBits } from './filters.js';
 import { TF_MS } from './time.js';
@@ -73,6 +73,19 @@ function unpackEntry(x: unknown): Partial<JournalEntry> {
   return { entryAlt: alt, ...(miss ? { missed: true } : {}) };
 }
 
+/** stop lab: R with the strategy's own stop, 1.5x and 2x as far, plus whether the 2x stop reached the target */
+function packStops(e: JournalEntry): number[] | null {
+  const st = e.stops;
+  if (!st || STOP_WIDTHS.some((w) => !st[w] || st[w]!.outcome === 'OPEN')) return null;
+  return [...STOP_WIDTHS.map((w) => r3(st[w]!.rNet) ?? 0), st.W20!.outcome === 'WIN' ? 1 : 0];
+}
+function unpackStops(x: unknown): Partial<JournalEntry> {
+  if (!Array.isArray(x) || x.length < 3) return {};
+  const v = x as number[];
+  const stops = Object.fromEntries(STOP_WIDTHS.map((w, i) => [w, { outcome: (w === 'W20' ? (v[3] ? 'WIN' : 'EXPIRED') : v[i] > 0 ? 'WIN' : 'LOSS') as Outcome, rNet: v[i] }]));
+  return { stops };
+}
+
 const r3 = (x: number | undefined | null) => (x === undefined || x === null || !Number.isFinite(x) ? null : Math.round(x * 1000) / 1000);
 
 export function encode(e: JournalEntry): Rec {
@@ -106,7 +119,8 @@ export function encode(e: JournalEntry): Rec {
     packExits(e),
     e.seed ? 1 : 0,
     f.extra ? packExtra(f.extra) : null,
-    packEntry(e)
+    packEntry(e),
+    packStops(e)
   ];
 }
 
@@ -167,6 +181,7 @@ export function decode(r: Rec, s: Pick<Settings, 'ltf' | 'htf'>): JournalEntry {
     barsOpen: 0,
     ...(exitsR ? { exits: unpackExits(exitsR) } : {}),
     ...unpackEntry(r[27]),
+    ...unpackStops(r[28]),
     ...(r[25] === 1 ? { seed: true } : {}),
     archived: true
   };
@@ -242,12 +257,13 @@ export function encodeLite(e: JournalEntry): Lite {
       const b = e.filterBits ?? (e.signal.features ? filterBits(e.signal) : null);
       return b ? [b.pass, b.known] : null;
     })(),
-    packEntry(e)
+    packEntry(e),
+    packStops(e)
   ];
 }
 export function liteOfRec(r: Rec, s: Pick<Settings, 'ltf' | 'htf'>): Lite {
   const b = filterBits(decode(r, s).signal);
-  return [r[0] as number, r[1] as number, r[2] as number, r[3] as number, r[4] as number, r[6] as number, (r[17] as number | null) ?? null, (r[24] as number[] | null) ?? null, [b.pass, b.known], (r[27] as number[] | null) ?? null];
+  return [r[0] as number, r[1] as number, r[2] as number, r[3] as number, r[4] as number, r[6] as number, (r[17] as number | null) ?? null, (r[24] as number[] | null) ?? null, [b.pass, b.known], (r[27] as number[] | null) ?? null, (r[28] as number[] | null) ?? null];
 }
 
 export function decodeLite(r: Lite, s: Pick<Settings, 'ltf' | 'htf'>): JournalEntry {
@@ -275,6 +291,7 @@ export function decodeLite(r: Lite, s: Pick<Settings, 'ltf' | 'htf'>): JournalEn
     barsOpen: 0,
     ...(ex ? { exits: unpackExits(ex) } : {}),
     ...unpackEntry(r[9]),
+    ...unpackStops(r[10]),
     ...(Array.isArray(r[8]) ? { filterBits: { pass: (r[8] as number[])[0], known: (r[8] as number[])[1] } } : {}),
     archived: true
   };

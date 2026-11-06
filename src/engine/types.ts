@@ -127,6 +127,17 @@ export interface PlanState {
  * LIMIT_BARS candles, as a maker order. Missed limit trades count as 0R.
  */
 export type EntryMode = 'MARKET' | 'LIMIT';
+
+/**
+ * Stop lab: every setup is also followed with its stop 1.5x and 2x as far from the entry (same target,
+ * position sized down so the $ loss at the stop stays the same). Shows how often tight stops get
+ * "hunted" (stopped out, then price goes on to the target) and switches a playbook to a wider stop when
+ * that clearly pays after fees.
+ */
+export type StopWidth = 'W10' | 'W15' | 'W20';
+export const STOP_WIDTHS: StopWidth[] = ['W10', 'W15', 'W20'];
+export const STOP_MULT: Record<StopWidth, number> = { W10: 1, W15: 1.5, W20: 2 };
+export const STOP_LABEL: Record<StopWidth, string> = { W10: "Strategy's own stop", W15: 'Stop 1.5x as far', W20: 'Stop 2x as far' };
 export const LIMIT_PULLBACK_R = 0.3;
 export const LIMIT_BARS = 3;
 export interface EntryAlt {
@@ -411,6 +422,8 @@ export interface Signal {
   entryMode?: EntryMode; // LIMIT = wait for the pullback price below (above) the close
   limit?: { price: number; bars: number }; // the limit price the entry lab tests for this setup
   marketEntry?: number; // limit-mode trades: the close at the signal (the market entry)
+  stopWidth?: StopWidth; // the trade uses a wider stop picked by the stop lab
+  baseSl?: number; // the strategy's own stop, before widening
 }
 
 export type EntryStatus = 'ACTIVE' | 'FILTERED' | 'PAUSED';
@@ -437,4 +450,5 @@ export interface JournalEntry {
   filledAt?: number; // limit-mode trades: candle the limit order filled on
   missed?: boolean; // limit-mode trade whose order never filled (counted as 0R)
   entryAlt?: EntryAlt; // entry lab: the other way in
+  stops?: Partial<Record<StopWidth, PlanState>>; // stop lab: the strategy's own stop, 1.5x and 2x as far (playbook target, same $ risk)
 }

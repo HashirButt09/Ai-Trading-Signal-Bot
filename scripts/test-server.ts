@@ -130,7 +130,7 @@ ok(new Set(journal.map((e) => e.signal.id)).size === journal.length, 'no duplica
 // every resolved trade must match a full candle-by-candle replay (including those spanning the outage)
 let match = 0;
 for (const e of done) {
-  let ref: any = { ...e, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: undefined, resolvedAt: undefined, be: undefined, peak: undefined, part: undefined, filledAt: undefined, missed: undefined, entryAlt: undefined, exits: undefined, mfeR: undefined, maeR: undefined };
+  let ref: any = { ...e, outcome: 'OPEN', rNet: 0, barsOpen: 0, lastT: undefined, resolvedAt: undefined, be: undefined, peak: undefined, part: undefined, filledAt: undefined, missed: undefined, entryAlt: undefined, stops: undefined, exits: undefined, mfeR: undefined, maeR: undefined };
   for (const k of market[e.signal.symbol].m5) {
     ref = advanceEntry(ref, k, settings);
     if (ref.outcome !== 'OPEN') break;

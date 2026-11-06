@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { ALL_STRATEGIES, EXIT_LABEL, EXIT_PLANS, LIMIT_BARS, LIMIT_PULLBACK_R, PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type JournalEntry, type StrategyId } from '../engine/types';
-import { btcFilter, computeStats, entryReport, exitReport, independentCount } from '../engine/journal';
+import { ALL_STRATEGIES, EXIT_LABEL, EXIT_PLANS, STOP_LABEL, STOP_WIDTHS, LIMIT_BARS, LIMIT_PULLBACK_R, PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type JournalEntry, type StrategyId } from '../engine/types';
+import { btcFilter, computeStats, entryReport, exitReport, independentCount, stopChoices, stopReport } from '../engine/journal';
 import { Progress } from './Progress';
 import { FILTER_MIN, FILTERS, GATE_MIN, GATE_ON_R, GATE_WINDOW, learnFilters, profitGate } from '../engine/filters';
 import { isIgnored } from '../engine/types';
@@ -45,6 +45,8 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
   const btc = btcFilter(all, s);
   const lab = useMemo(() => learnFilters(all, s), [all, s]);
   const pg = useMemo(() => profitGate(all, s), [all, s]);
+  const stopAll = useMemo(() => stopReport(all, null, s, 100), [all, s]);
+  const stopBy = useMemo(() => stopChoices(all, s, ALL_STRATEGIES), [all, s]);
 
   const status = (k: StrategyId) => {
     const h = scanner.health[k];
@@ -239,6 +241,37 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
                 </tr>
               ))}
               {rows.every((r) => r.ex.n === 0) && <tr><td colSpan={8} className="muted">Fills in as trades and their exit plans finish.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="label">Stop lab: are the stops too tight?</div>
+        <div className="muted small">
+          Every setup is also followed with its stop 1.5x and 2x as far away, with the same target. The position is sized down so a stop-out still loses the same $. "Hunted" = stopped out at the strategy's own stop, then price went on to the target (the 2x stop held). A strategy moves to a wider stop by itself once that clearly earned more after fees on its last {PROMOTE_MIN_TRADES}+ setups. Until then it follows all strategies together (100+ setups).
+        </div>
+        <div className="small" style={{ margin: '6px 0' }}>
+          All strategies ({stopAll.n} setups): {stopAll.n ? <><b className={stopAll.hunted > 0.25 ? 'down-t' : ''}>{pct(stopAll.hunted, 0)}</b> of stop-outs were hunted · {STOP_WIDTHS.map((w) => `${STOP_LABEL[w]} ${num(stopAll.widths[w].avgR, 2)}R`).join(' · ')}</> : 'fills in as new setups finish (it started with this update).'}
+        </div>
+        <div className="tablewrap">
+          <table className="small">
+            <thead>
+              <tr><th style={{ textAlign: 'left' }}>Strategy</th><th>Setups</th><th>Hunted</th>{STOP_WIDTHS.map((w) => <th key={w}>{STOP_LABEL[w]}</th>)}<th style={{ textAlign: 'left' }}>Uses</th></tr>
+            </thead>
+            <tbody>
+              {ALL_STRATEGIES.map((k) => stopBy[k]).filter((r) => r && r.n > 0).sort((a, b) => b.n - a.n).map((r) => {
+                const k = ALL_STRATEGIES.find((x) => stopBy[x] === r)!;
+                return (
+                  <tr key={k}>
+                    <td>{STRATEGY_LABEL[k]}</td>
+                    <td>{r.n}{r.n < PROMOTE_MIN_TRADES ? `/${PROMOTE_MIN_TRADES}` : ''}</td>
+                    <td>{pct(r.hunted, 0)}</td>
+                    {STOP_WIDTHS.map((w) => <td key={w} className={r.choice === w ? 'sel' : ''}>{rCell(r.widths[w].avgR, r.n)} <span className="muted">· {pct(r.widths[w].winRate, 0)}</span></td>)}
+                    <td>{STOP_LABEL[r.choice]}{r.pooled ? <span className="muted"> (all strategies)</span> : ''}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

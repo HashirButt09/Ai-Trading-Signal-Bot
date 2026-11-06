@@ -1,5 +1,6 @@
-import { ALL_STRATEGIES, EXIT_PLANS, isIgnored, PROBATION, PROMOTE_MIN_TRADES, type Candle, type EntryAlt, type EntryMode, type ExitPlanId, type JournalEntry, type Outcome, type PlanLevels, type PlanState, type Settings, type Signal, type StrategyId } from './types.js';
+import { ALL_STRATEGIES, EXIT_PLANS, isIgnored, PROBATION, PROMOTE_MIN_TRADES, type Candle, type EntryAlt, type EntryMode, type ExitPlanId, type JournalEntry, type Outcome, type PlanLevels, type PlanState, type Settings, type Signal, type StopWidth, type StrategyId, STOP_MULT, STOP_WIDTHS } from './types.js';
 import { TF_MS } from './time.js';
+import { planRisk } from './risk.js';
 import { featurize, predictMeta, trainMeta, type MetaModel, type Sample } from './meta.js';
 import { effectiveThreshold, retrainGated } from './learner.js';
 
@@ -91,7 +92,8 @@ function stopHit(g: Geo, lv: PlanLevels, st: PlanState, k: Candle): boolean {
 }
 
 /** still being followed: the trade itself, any exit plan of the exit lab, or the entry lab */
-export const isTracking = (e: JournalEntry) => e.outcome === 'OPEN' || EXIT_PLANS.some((p) => e.exits?.[p]?.outcome === 'OPEN') || e.entryAlt?.outcome === 'OPEN';
+export const isTracking = (e: JournalEntry) =>
+  e.outcome === 'OPEN' || EXIT_PLANS.some((p) => e.exits?.[p]?.outcome === 'OPEN') || e.entryAlt?.outcome === 'OPEN' || STOP_WIDTHS.some((w) => e.stops?.[w]?.outcome === 'OPEN');
 
 const tfMs = (sig: Signal) => TF_MS[sig.ltf] ?? 300_000;
 
@@ -101,6 +103,7 @@ export function newEntry(signal: Signal, status: JournalEntry['status'], lastT?:
   if (signal.plans) e.exits = Object.fromEntries(EXIT_PLANS.filter((p) => signal.plans![p]).map((p) => [p, { outcome: 'OPEN', rNet: 0 }])) as JournalEntry['exits'];
   if (signal.entryMode === 'LIMIT' && signal.marketEntry) e.entryAlt = { mode: 'MARKET', price: signal.marketEntry, filled: signal.time, outcome: 'OPEN', rNet: 0 };
   else if (signal.limit) e.entryAlt = { mode: 'LIMIT', price: signal.limit.price, until: signal.time + signal.limit.bars * tfMs(signal), outcome: 'OPEN', rNet: 0 };
+  if (signal.plans) e.stops = { W10: { outcome: 'OPEN', rNet: 0 }, W15: { outcome: 'OPEN', rNet: 0 }, W20: { outcome: 'OPEN', rNet: 0 } };
   return e;
 }
 
@@ -111,6 +114,36 @@ export function applyExitPlan(sig: Signal, plan: ExitPlanId): Signal {
   const risk = Math.abs(sig.entry - sig.sl) || 1e-12;
   const rr = Math.abs(lv.tp - sig.entry) / risk;
   return { ...sig, tp: lv.tp, rr, beAtR: lv.beAtR, exitPlan: plan, features: { ...sig.features, rr } };
+}
+
+/** where the stop lab's stop sits for one width: the strategy's own stop moved further away */
+function stopGeo(sig: Signal, w: StopWidth, s: Settings): Geo {
+  const base = sig.baseSl ?? sig.sl;
+  const dist = Math.abs(sig.entry - base) * STOP_MULT[w];
+  const long = sig.side === 'LONG';
+  const slPct = dist / sig.entry || 1e-12;
+  return { long, entry: sig.entry, sl: long ? sig.entry - dist : sig.entry + dist, cost: feeFrac(sig.entryMode ?? 'MARKET', s) / slPct };
+}
+
+/** switch a signal to a wider stop the stop lab picked: same entry and target, position sized down to the same $ loss */
+export function applyStopWidth(sig: Signal, w: StopWidth, s: Settings): Signal {
+  if (w === 'W10' || sig.stopWidth) return sig;
+  const g = stopGeo(sig, w, s);
+  const plan = planRisk(sig.entry, g.sl, s);
+  if (!plan.ok) return sig;
+  const risk = Math.abs(sig.entry - g.sl);
+  return {
+    ...sig,
+    sl: g.sl,
+    baseSl: sig.sl,
+    stopWidth: w,
+    rr: Math.abs(sig.tp - sig.entry) / risk,
+    slPct: plan.slPct,
+    leverage: plan.leverage,
+    margin: plan.margin,
+    notional: plan.notional,
+    estLossUsd: plan.estLossUsd
+  };
 }
 
 /** switch a signal to the limit entry the entry lab tested: same stop and target, same $ risk */
@@ -160,8 +193,10 @@ export function advanceEntry(e: JournalEntry, k: Candle, s: Settings): JournalEn
   if (sig.entryMode === 'LIMIT' && !e.filledAt && e.outcome === 'OPEN') {
     const long = sig.side === 'LONG';
     if (k.t > sig.time + (sig.limit?.bars ?? 3) * tfMs(sig)) {
-      const exits = e.exits ? (Object.fromEntries(Object.keys(e.exits).map((p) => [p, { outcome: 'EXPIRED', rNet: 0, resolvedAt: k.t }])) as JournalEntry['exits']) : undefined;
-      return { ...out, outcome: 'EXPIRED', rNet: 0, resolvedAt: k.t, missed: true, ...(exits ? { exits } : {}) };
+      const zero = <T extends object>(o: T | undefined) => (o ? (Object.fromEntries(Object.keys(o).map((p) => [p, { outcome: 'EXPIRED', rNet: 0, resolvedAt: k.t }])) as T) : undefined);
+      const exits = zero(e.exits);
+      const stops = zero(e.stops);
+      return { ...out, outcome: 'EXPIRED', rNet: 0, resolvedAt: k.t, missed: true, ...(exits ? { exits } : {}), ...(stops ? { stops } : {}) };
     }
     if (!(long ? k.l <= sig.entry : k.h >= sig.entry)) return out;
     out = { ...out, filledAt: k.t };
@@ -176,6 +211,15 @@ export function advanceEntry(e: JournalEntry, k: Candle, s: Settings): JournalEn
       if (st && lv) exits[p] = stepPlan(g, lv, st, k, bars);
     }
     out = { ...out, exits, labBars: bars };
+    if (e.stops) {
+      const stops = { ...e.stops };
+      const tp = sig.plans.A?.tp ?? sig.tp;
+      for (const w of STOP_WIDTHS) {
+        const st = stops[w];
+        if (st) stops[w] = stepPlan(stopGeo(sig, w, s), { tp }, st, k, bars);
+      }
+      out = { ...out, stops };
+    }
   }
   if (e.outcome !== 'OPEN') return out;
   const long = sig.side === 'LONG';
@@ -239,6 +283,51 @@ export function exitReport(list: JournalEntry[], strategy: StrategyId, s: Settin
     if (d >= needOf(x.n) && d > edge) (choice = p), (edge = d);
   }
   return { n, plans, choice, needR };
+}
+
+export interface StopReport {
+  n: number; // independent setups with every stop width finished
+  widths: Record<StopWidth, { avgR: number; winRate: number }>;
+  hunted: number; // share of setups stopped out at the strategy's own stop that then reached the target (2x stop held)
+  choice: StopWidth;
+  needR: number;
+  pooled?: boolean; // choice taken from all strategies together (this one has too few setups of its own)
+}
+
+/** stop lab for one playbook (or all together): a wider stop only when it clearly earned more after fees */
+export function stopReport(list: JournalEntry[], strategy: StrategyId | null, s: Settings, minN = PROMOTE_MIN_TRADES): StopReport {
+  const done = list
+    .filter((e) => (strategy === null || e.signal.strategy === strategy) && !isIgnored(e, s) && e.stops && STOP_WIDTHS.every((w) => e.stops![w] && e.stops![w]!.outcome !== 'OPEN'))
+    .sort((a, b) => (a.resolvedAt ?? a.signal.time) - (b.resolvedAt ?? b.signal.time));
+  const groups = clusters(done).slice(strategy === null ? -200 : -60);
+  const n = groups.length;
+  const widths = {} as StopReport['widths'];
+  for (const w of STOP_WIDTHS) {
+    const st = computeStats(groups.map((g) => g.reduce((a, e) => a + e.stops![w]!.rNet, 0) / g.length));
+    widths[w] = { avgR: st.avgR, winRate: st.winRate };
+  }
+  const lost = groups.filter((g) => g.some((e) => e.stops!.W10!.rNet < 0));
+  const hunted = lost.length ? lost.filter((g) => g.some((e) => e.stops!.W10!.rNet < 0 && e.stops!.W20!.outcome === 'WIN')).length / lost.length : 0;
+  const needR = Math.max(0.1, 0.6 / Math.sqrt(Math.max(1, n)));
+  let choice: StopWidth = 'W10';
+  let edge = 0;
+  if (n >= minN)
+    for (const w of ['W15', 'W20'] as StopWidth[]) {
+      const d = widths[w].avgR - widths.W10.avgR;
+      if (d >= needR && d > edge) (choice = w), (edge = d);
+    }
+  return { n, widths, hunted, choice, needR };
+}
+
+/** the stop width new trades of each playbook use: its own verdict, or all playbooks together while it has too few setups */
+export function stopChoices(list: JournalEntry[], s: Settings, strategies: StrategyId[]): Record<string, StopReport> {
+  const pooled = stopReport(list, null, s, 100);
+  return Object.fromEntries(
+    strategies.map((k) => {
+      const own = stopReport(list, k, s);
+      return [k, own.n >= PROMOTE_MIN_TRADES ? own : { ...own, choice: pooled.choice, pooled: true }];
+    })
+  );
 }
 
 export interface EntryReport {

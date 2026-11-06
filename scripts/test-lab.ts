@@ -111,7 +111,7 @@ function sig(strategy: StrategyId = 'TREND_FVG_RETEST', t = T0, symbol = 'XUSDT'
     const t = NOW - ageDays * DAY;
     const x = newEntry(sig('DAY_SWEEP', t, `C${symN++}USDT`), status);
     if (open) return x;
-    return { ...x, outcome: 'LOSS', rNet: -1, resolvedAt: t, exits: lab ? { ...x.exits, B: { outcome: 'OPEN', rNet: 0 } } : { A: { outcome: 'LOSS', rNet: -1 }, B: { outcome: 'LOSS', rNet: -1 }, C: { outcome: 'LOSS', rNet: -1 }, D: { outcome: 'LOSS', rNet: -1 } } };
+    return { ...x, outcome: 'LOSS', rNet: -1, resolvedAt: t, exits: lab ? { ...x.exits, B: { outcome: 'OPEN', rNet: 0 } } : { A: { outcome: 'LOSS', rNet: -1 }, B: { outcome: 'LOSS', rNet: -1 }, C: { outcome: 'LOSS', rNet: -1 }, D: { outcome: 'LOSS', rNet: -1 } }, stops: x.stops && { W10: { outcome: 'LOSS', rNet: -1 }, W15: { outcome: 'LOSS', rNet: -1 }, W20: { outcome: 'LOSS', rNet: -1 } }, entryAlt: x.entryAlt && { ...x.entryAlt, outcome: 'LOSS', rNet: -1 } };
   };
   const j = [mkE('PAUSED', 2), mkE('PAUSED', 0.5), mkE('ACTIVE', 5), mkE('ACTIVE', 9), mkE('PAUSED', 3, true), mkE('PAUSED', 3, false, true)];
   const sp = splitFinished(j);

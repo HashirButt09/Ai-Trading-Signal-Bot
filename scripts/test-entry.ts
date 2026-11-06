@@ -1,7 +1,7 @@
 // Entry lab (market vs limit entry) and the new exit plans E (time stop) and F (half at 1R + trail).
 import { DEFAULT_SETTINGS, LIMIT_BARS, type Candle, type JournalEntry, type Settings, type StrategyId } from '../src/engine/types';
 import { TF_MS } from '../src/engine/time';
-import { advanceEntry, applyExitPlan, applyLimitEntry, entryReport, exitReport, isTracking, newEntry } from '../src/engine/journal';
+import { advanceEntry, applyExitPlan, applyLimitEntry, applyStopWidth, entryReport, exitReport, isTracking, newEntry, stopChoices, stopReport } from '../src/engine/journal';
 import { decode, decodeLite, encode, encodeLite, liteOfRec } from '../src/engine/archive';
 import { limitText } from '../server/scan';
 
@@ -139,6 +139,42 @@ const run = (e: JournalEntry, cs: Candle[]) => cs.reduce((x, c) => advanceEntry(
   const lm = run(newEntry(applyLimitEntry(sig()), 'ACTIVE'), [k(1, 100, 100.6, 99.9, 100.5), k(2, 100.5, 101, 100.2, 100.9), k(3, 100.9, 101.6, 100.8, 101.5), k(4, 101.5, 101.7, 101.4, 101.6)]);
   const ld = decode(encode(lm), S);
   ok(ld.missed === true && ld.signal.entryMode === 'LIMIT' && ld.entryAlt!.mode === 'MARKET', 'a missed limit trade stays marked as missed');
+}
+
+// ---------- stop lab: hunted stops ----------
+{
+  // like the SAND chart: dips just through the stop (99), then runs to the target (101.5)
+  const hunt = run(newEntry(sig(), 'ACTIVE'), [k(1, 100, 100.1, 98.8, 99.2), k(2, 99.2, 100.5, 99.1, 100.4), k(3, 100.4, 101.6, 100.3, 101.5)]);
+  ok(hunt.outcome === 'LOSS' && hunt.stops!.W10!.outcome === 'LOSS', 'own stop at 99 is hit by the dip to 98.8');
+  ok(hunt.stops!.W15!.outcome === 'WIN' && near(hunt.stops!.W15!.rNet, 1.5 / 1.5) && hunt.stops!.W20!.outcome === 'WIN' && near(hunt.stops!.W20!.rNet, 1.5 / 2), 'the 1.5x / 2x stops survive and reach the same target (+1R / +0.75R)');
+  const real = run(newEntry(sig(), 'ACTIVE'), [k(1, 100, 100.1, 97.5, 97.8)]);
+  ok(real.stops!.W15!.outcome === 'LOSS' && near(real.stops!.W20!.rNet, -1), 'a real move against the trade stops every width at -1R (same $ loss)');
+  // wider stop: same entry and target, smaller position so the $ loss stays the same
+  const S2: Settings = { ...DEFAULT_SETTINGS };
+  const base = { ...sig(), slPct: 0.01, leverage: 19, notional: 190, margin: 10, estLossUsd: 1.99 };
+  const w = applyStopWidth(base as any, 'W15', S2);
+  ok(w.sl === 98.5 && w.baseSl === 99 && w.stopWidth === 'W15' && w.tp === 101.5 && near(w.rr, 1), 'wider stop: 98.5 instead of 99, target unchanged');
+  ok(w.leverage < base.leverage && w.estLossUsd <= S2.maxLossUsd + 1e-9, `position sized down (${base.leverage}x -> ${w.leverage}x), loss at stop still within $${S2.maxLossUsd}`);
+  const wt = run(newEntry(w, 'ACTIVE'), [k(1, 100, 100.1, 98.8, 99.2), k(2, 99.2, 101.6, 99.1, 101.5)]);
+  ok(wt.outcome === 'WIN' && wt.stops!.W10!.outcome === 'LOSS' && wt.stops!.W15!.outcome === 'WIN', 'a widened trade survives the dip; the lab still follows the original stop');
+
+  // switching: only on clear evidence, per strategy, else all strategies together
+  const mk = (st: StrategyId, i: number, w10: number, w15: number, w20: number): JournalEntry => {
+    const e = newEntry(sig(st, T0 + i * 3_600_000), 'FILTERED');
+    return { ...e, outcome: w10 > 0 ? 'WIN' : 'LOSS', rNet: w10, resolvedAt: e.signal.time + 1, stops: { W10: { outcome: w10 > 0 ? 'WIN' : 'LOSS', rNet: w10 }, W15: { outcome: w15 > 0 ? 'WIN' : 'LOSS', rNet: w15 }, W20: { outcome: w20 > 0 ? 'WIN' : 'EXPIRED', rNet: w20 } } };
+  };
+  const list: JournalEntry[] = [];
+  for (let i = 0; i < 60; i++) list.push(i % 2 ? mk('XABC_FIB', i, 1.5, 1, 0.75) : mk('XABC_FIB', i, -1, i % 4 === 0 ? 1 : -1, i % 4 === 0 ? 0.75 : -1));
+  const r = stopReport(list, 'XABC_FIB', S);
+  ok(r.hunted === 0.5 && r.choice === 'W15', `half the stop-outs were hunted -> XABC moves to the 1.5x stop (${r.widths.W10.avgR.toFixed(2)}R -> ${r.widths.W15.avgR.toFixed(2)}R)`);
+  const fair: JournalEntry[] = [];
+  for (let i = 0; i < 60; i++) fair.push(i % 2 ? mk('CIPHER_B', i, 1.5, 1, 0.75) : mk('CIPHER_B', i, -1, -1, -1));
+  ok(stopReport(fair, 'CIPHER_B', S).choice === 'W10', 'stops that were not hunted stay where they are');
+  const few = [...list, ...[0, 1, 2].map((i) => mk('CHART_WEDGE', i, -1, 1, 0.75))];
+  const ch = stopChoices([...few, ...list.map((e, i) => ({ ...e, signal: { ...e.signal, strategy: 'BREAK_RETEST' as StrategyId, time: e.signal.time + 7 } }))], S, ['CHART_WEDGE', 'XABC_FIB']);
+  ok(ch.CHART_WEDGE.pooled === true && ch.CHART_WEDGE.choice === 'W15' && !ch.XABC_FIB.pooled, 'a strategy with few setups follows all strategies together (100+ setups)');
+  const enc = decode(encode(hunt), S);
+  ok(enc.stops!.W10!.rNet === +hunt.stops!.W10!.rNet.toFixed(3) && enc.stops!.W20!.outcome === 'WIN' && decodeLite(encodeLite(hunt), S).stops!.W15!.rNet === enc.stops!.W15!.rNet, 'archive and digest keep the stop lab');
 }
 
 console.log(fails ? `\n${fails} FAILED` : '\nAll entry-lab and new exit-plan checks passed');
