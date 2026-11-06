@@ -1,3 +1,4 @@
+import { parseUniverse, refreshUniverse, UNIVERSE_EVERY_MS, UNIVERSE_KEY, watchOf, type UniverseFetch } from './universe.js';
 import { DECIDE_MAX_AGE, type Decisions } from '../src/engine/decide.js';
 import type { Candle, JournalEntry, Settings, Signal } from '../src/engine/types.js';
 import { buildHtf } from '../src/engine/regime.js';
@@ -25,10 +26,13 @@ export interface ScanDeps {
   now?: () => number;
   /** live funding rate and open interest change per symbol (optional; missing = unknown) */
   market?: (symbols: string[]) => Promise<Record<string, MarketCtx>>;
+  /** Binance's contract list + 24h volume, for the automatic coin list (optional) */
+  universe?: UniverseFetch;
 }
 
 export interface ScanReport {
   skipped?: 'locked' | 'nothing-due';
+  universe?: { size: number; symbols: number; added: string[]; removed: string[]; newListings: string[] };
   processed: string[];
   newSignals: string[];
   notified: number;
@@ -152,7 +156,7 @@ async function scanProfile(
       }
     }
   };
-  await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);
+  await Promise.all(Array.from({ length: 10 }, () => worker()));
 
 
   // learning reads the recent results of every playbook (digest) plus the live journal
@@ -423,7 +427,7 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
   // quick check without the lock: is any profile due?
   // quiet minutes cost two reads; every 10th minute also checks whether archive upkeep is overdue
   const checkUpkeep = Math.floor(now / 60_000) % 10 === 3;
-  const [rawS, rawC, rawSt] = await d.kv.pipe([['GET', K.settings], ['GET', K.cursor], ...(checkUpkeep ? [['GET', K.status]] : [])]);
+  const [rawS, rawC, rawU, rawSt] = await d.kv.pipe([['GET', K.settings], ['GET', K.cursor], ['GET', UNIVERSE_KEY], ...(checkUpkeep ? [['GET', K.status]] : [])]);
   {
     let s0: Settings;
     let c0: Record<string, number>;
@@ -434,6 +438,9 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
       s0 = cleanSettings({});
       c0 = {};
     }
+    const u0 = parseUniverse(rawU);
+    const sUser = s0;
+    s0 = { ...s0, watchlist: watchOf(s0, u0) };
     let anyDue = dueSymbols(s0, c0, now).length > 0;
     const extras = profileList(s0).filter((p) => p.id !== MAIN);
     if (!anyDue && extras.length) {
@@ -457,6 +464,16 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
         /* none yet */
       }
       const overdue = checkUpkeep ? profileList(s0).filter((p) => now - (maint[p.id] ?? 0) >= MAINT_EVERY_MS) : [];
+      // the automatic coin list: refreshed hourly on a quiet minute (never competes with a scan)
+      if (!overdue.length && sUser.autoCoins && d.universe && (!u0 || now - u0.at >= UNIVERSE_EVERY_MS)) {
+        try {
+          const stNow = await loadStatus(d.kv);
+          report.universe = await refreshUniverse(d.kv, d.universe, sUser, stNow.scanMs, now, d.send);
+        } catch (e: any) {
+          report.errors['coin list'] = String(e?.message ?? e).slice(0, 160);
+        }
+        return { ...report, skipped: 'nothing-due' };
+      }
       if (!overdue.length) return { ...report, skipped: 'nothing-due' };
       const lock = await acquireLock(d.kv);
       if (!lock) return { ...report, skipped: 'locked' };
@@ -494,7 +511,9 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
   let settings: Settings;
   try {
     const shared = await loadAll(d.kv);
-    settings = shared.settings;
+    // your pairs + the automatic coin list (your settings keep only your own pairs)
+    const userWatch = shared.settings.watchlist;
+    settings = { ...shared.settings, watchlist: watchOf(shared.settings, shared.universe) };
     st = shared.status;
     let changed = false;
     // live funding / open interest once per run for every pair (best effort: missing = unknown)
@@ -513,7 +532,7 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
       const r = await scanProfile(d, prof.id, settings, state.journal, state.model, state.cursor, now, fresh, report.errors, state.digest, market, state.decide);
       if (r.prunedSymbols.length) {
         settings.watchlist = settings.watchlist.filter((x) => !r.prunedSymbols.includes(x));
-        await d.kv.pipe(saveCmds({ settings }));
+        if (userWatch.some((x) => r.prunedSymbols.includes(x))) await d.kv.pipe(saveCmds({ settings: { ...shared.settings, watchlist: userWatch.filter((x) => !r.prunedSymbols.includes(x)) } }));
       }
       await d.kv.pipe([
         ...saveCmds({ journal: r.journal, model: r.retrained ? r.model : undefined, cursor: r.cursor, profile: prof.id, digest: r.digest ?? undefined }),
@@ -546,10 +565,14 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
       }
     }
 
+    // how long a full scan takes: the automatic coin list grows or shrinks with it
+    const took = Date.now() - started;
+    const scanMs = report.processed.length >= 5 ? Math.round(st.scanMs ? 0.7 * st.scanMs + 0.3 * took : took) : st.scanMs;
     st = {
       ...st,
       ver: st.ver + (changed ? 1 : 0),
       lastScan: now,
+      ...(scanMs ? { scanMs } : {}),
       errors: report.errors,
       lastError: Object.keys(report.errors).length ? `${Object.keys(report.errors).length} pair(s) failed: ${Object.values(report.errors)[0]}` : '',
       lastSignalAt: fresh.length ? now : st.lastSignalAt,

@@ -63,6 +63,8 @@ export class Scanner {
   private av = -1;
   /** your "I took it" (1) / "Skipped" (0) marks on shown signals, by signal id */
   took: Record<string, [number, number]> = {};
+  /** the server's automatic coin list (every liquid Binance USDT perpetual it watches) */
+  universe: import('../engine/universe').Universe | null = null;
   /** everything learning and the stats pages use: archive + live journal */
   get history(): JournalEntry[] {
     if (!this.archive.length) return this.journal;
@@ -212,6 +214,7 @@ export class Scanner {
       if (r.archive) this.archive = r.archive; // otherwise unchanged since our copy
       if (r.av !== undefined) this.av = r.av;
       if (r.took) this.took = r.took;
+      if (r.universe !== undefined) this.universe = r.universe;
       this.model = r.model ?? null;
       this.ver = r.status.ver;
       this.health = playbookHealth(this.history, this.settings);

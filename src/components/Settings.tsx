@@ -180,8 +180,24 @@ export function Settings({ value, onChange, scanner }: { value: S; onChange: (s:
         <label className="field">
           <span>Watchlist (Binance USDT-M futures symbols, comma separated)</span>
           <textarea rows={3} value={wl} onChange={(e) => setWl(e.target.value)} onBlur={() => set('watchlist', [...new Set(wl.split(/[\s,]+/).map((x) => x.trim().toUpperCase()).filter(Boolean))].slice(0, 100))} />
-          <em>Up to 100 pairs. The scanner tracks and generates trades across all pairs listed here.</em>
+          <em>Your own pairs: always scanned. With the automatic coin list on, the server adds every other liquid Binance USDT perpetual too.</em>
         </label>
+        <label className="check">
+          <input type="checkbox" checked={value.autoCoins} onChange={(e) => set('autoCoins', e.target.checked)} /> Automatic coin list: scan every liquid Binance USDT-M perpetual (needs the server). New listings join by themselves after ~3 days of history (you get a notification); delisted or dried-up coins drop out. Refreshed hourly.
+        </label>
+        {value.autoCoins && (
+          <div className="grid3">
+            {numField('autoCoinsMax', 'Most coins to scan', 10, 'The server shrinks or grows the list below this so every scan finishes in time and signals are never late')}
+            {numField('autoCoinsMinVolM', 'Minimum 24h volume (million USDT)', 5, 'Thinner coins have wider spreads, more slippage and more fake moves')}
+          </div>
+        )}
+        {value.autoCoins && scanner?.universe && (
+          <div className="muted small">
+            Scanning <b>{scanner.universe.symbols.length}</b> coins now ({scanner.universe.available} liquid ones on Binance, list updated {new Date(scanner.universe.at).toLocaleTimeString()}).
+            {scanner.universe.added.length ? <> Recently added: {scanner.universe.added.slice(0, 8).map((a) => a.symbol.replace('USDT', '')).join(', ')}.</> : null}
+            {scanner.universe.removed.length ? <> Dropped: {scanner.universe.removed.slice(0, 8).map((a) => a.symbol.replace('USDT', '')).join(', ')}.</> : null}
+          </div>
+        )}
         <div className="row gap wrap" style={{ marginTop: 6 }}>
           <button type="button" className="btn small" onClick={() => { set('watchlist', DEFAULT_SETTINGS.watchlist.slice(0, 10)); setWl(DEFAULT_SETTINGS.watchlist.slice(0, 10).join(', ')); }}>Top 10</button>
           <button type="button" className="btn small" onClick={() => { set('watchlist', DEFAULT_SETTINGS.watchlist.slice(0, 30)); setWl(DEFAULT_SETTINGS.watchlist.slice(0, 30).join(', ')); }}>Top 30</button>

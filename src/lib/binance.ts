@@ -149,3 +149,13 @@ export async function fetchMarketCtx(symbols: string[], budgetMs = 8000): Promis
   );
   return out;
 }
+
+/** every USDT-M contract and its 24h traded value (two public requests), for the automatic coin list */
+export async function fetchUniverse(): Promise<{ info: { symbol: string; status: string; contractType: string; quoteAsset: string; onboardDate?: number }[]; volume: Record<string, number> }> {
+  const [a, b] = await Promise.all([fetch(`${REST_BASE}/fapi/v1/exchangeInfo`, { signal: AbortSignal.timeout(8000) }), fetch(`${REST_BASE}/fapi/v1/ticker/24hr`, { signal: AbortSignal.timeout(8000) })]);
+  if (!a.ok || !b.ok) throw new Error(`Binance ${a.status}/${b.status} for the coin list`);
+  const info = ((await a.json()) as { symbols: any[] }).symbols.map((x) => ({ symbol: String(x.symbol), status: String(x.status), contractType: String(x.contractType), quoteAsset: String(x.quoteAsset), onboardDate: Number(x.onboardDate) || undefined }));
+  const volume: Record<string, number> = {};
+  for (const r of (await b.json()) as { symbol: string; quoteVolume: string }[]) volume[r.symbol] = +r.quoteVolume || 0;
+  return { info, volume };
+}

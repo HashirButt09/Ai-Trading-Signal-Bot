@@ -8,6 +8,7 @@
  */
 import type { Kv } from './kv.js';
 import { loadAll, PK } from './store.js';
+import { watchOf } from './universe.js';
 import { encode, type Rec } from '../src/engine/archive.js';
 import { runBacktest } from '../src/engine/backtest.js';
 import { MAIN, settingsFor } from '../src/engine/profiles.js';
@@ -61,10 +62,10 @@ export async function runReplay(d: ReplayDeps) {
   const profile = d.profile ?? MAIN;
   const budget = d.budgetMs ?? 40_000;
   const st = await loadReplayState(d.kv, profile);
-  const { settings: shared } = await loadAll(d.kv);
+  const { settings: shared, universe } = await loadAll(d.kv);
   const s = settingsFor(shared, profile);
   const step = TF_MS[s.ltf], hstep = TF_MS[s.htf];
-  const want = s.watchlist.slice(0, 40);
+  const want = watchOf(s, universe).slice(0, 60);
   const due = want.filter((p) => !st.done[p] || now - st.done[p] > REPLAY_REFRESH_MS).sort((a, b) => (st.done[a] ?? 0) - (st.done[b] ?? 0));
   const pick = due.slice(0, d.perRun ?? 3);
   if (!pick.length) return { ok: true, symbols: [], trades: 0, note: 'every coin is up to date' };

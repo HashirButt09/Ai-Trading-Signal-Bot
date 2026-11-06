@@ -231,6 +231,9 @@ export interface Settings {
   maxLeverage: number;
   minSlPct: number; // reject stops tighter than this (fraction)
   minSlFloor: number;
+  autoCoins: boolean; // scan every liquid Binance USDT perpetual automatically (new listings included)
+  autoCoinsMax: number; // at most this many coins (the scanner sizes itself below this)
+  autoCoinsMinVolM: number; // minimum 24h traded value, in million USDT
   gen?: GenSpec[]; // strategies the bot invented itself (rule sets, see inventor.ts) // your floor for the minimum stop distance (fraction, 0 = off); the agent's tuning can never go below it
   takerFee: number; // per side (fraction)
   slippage: number; // round trip (fraction)
@@ -346,6 +349,9 @@ export const DEFAULT_SETTINGS: Settings = {
   maxNewPerCandle: 1,
   minSlPct: 0.0015,
   minSlFloor: 0,
+  autoCoins: true,
+  autoCoinsMax: 100,
+  autoCoinsMinVolM: 20,
   takerFee: 0.0004,
   slippage: 0.0005,
   makerFee: 0.0002,

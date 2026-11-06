@@ -1,4 +1,5 @@
 import type { Decisions } from '../src/engine/decide.js';
+import type { Universe } from '../src/engine/universe.js';
 import { DEFAULT_SETTINGS, migrateSettings, normalizeSymbol, type JournalEntry, type Settings } from '../src/engine/types.js';
 import type { MetaModel } from '../src/engine/meta.js';
 import type { Kv } from './kv.js';
@@ -58,6 +59,7 @@ export interface ServerStatus {
   lastError: string;
   errors: Record<string, string>; // per symbol
   lastSignalAt: number;
+  scanMs?: number; // typical time of a full scan (sizes the automatic coin list)
   settingsAt: number; // when settings last changed on the server
   settingsBy: 'app' | 'agent' | 'inventor' | '';
   profiles?: Record<string, ProfileStatus>; // scan health of the extra timeframe bots
@@ -97,11 +99,11 @@ export async function loadAll(kv: Kv, profile: string = MAIN, full: boolean | { 
   const k = PK(profile);
   const opt = typeof full === 'object' ? full : { archive: full, recent: undefined };
   full = !!full;
-  const cmds: (string | number)[][] = [['GET', K.settings], ['GET', k.journal], ['GET', k.model], ['GET', k.cursor], ['GET', K.status], ['GET', k.digest], ['GET', k.decide]];
+  const cmds: (string | number)[][] = [['GET', K.settings], ['GET', k.journal], ['GET', k.model], ['GET', k.cursor], ['GET', K.status], ['GET', k.digest], ['GET', k.decide], ['GET', 'st:universe']];
   // the app only needs the recent closed trades (Trades tab = 7 days); the agent reads everything
   const n = opt.recent;
   if (full) cmds.push(['LRANGE', k.shown, n ? -n : 0, -1], ['LRANGE', k.silent, n ? -n : 0, -1], opt.archive ? ['LRANGE', k.archive, 0, -1] : ['LLEN', k.archive]);
-  const [s, j, m, c, st, dg, dc, sh, si, ar] = await kv.pipe(cmds);
+  const [s, j, m, c, st, dg, dc, un, sh, si, ar] = await kv.pipe(cmds);
   const live = parse<JournalEntry[]>(j, []);
   const listOf = <T>(v: unknown): T[] => (Array.isArray(v) ? v.map((x) => parse<T | null>(x, null)).filter((x): x is T => x !== null) : []);
   const closed = full ? [...listOf<JournalEntry>(sh), ...listOf<JournalEntry>(si)] : [];
@@ -116,6 +118,7 @@ export async function loadAll(kv: Kv, profile: string = MAIN, full: boolean | { 
     status: { ...EMPTY_STATUS, ...parse<Partial<ServerStatus>>(st, {}) },
     digest: parse<Lite[]>(dg, []),
     decide: parse<Decisions | null>(dc, null),
+    universe: parse<Universe | null>(un, null),
     archive: full && opt.archive ? listOf<Rec>(ar) : ([] as Rec[])
   };
 }

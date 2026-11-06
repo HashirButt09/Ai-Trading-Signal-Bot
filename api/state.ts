@@ -61,7 +61,7 @@ export async function GET(req: Request): Promise<Response> {
     const sendArchive = q.get('av') !== String(av);
     const all = await loadAll(kv, profile, { archive: sendArchive, recent: 600 });
     const took = parseTook(await kv.cmd('GET', K.took));
-    return json({ ...base, profile, status: all.status, settings: all.settings, journal: all.journal, model: all.model, av, took, ...(sendArchive ? { archive: all.archive } : {}) });
+    return json({ ...base, profile, status: all.status, settings: all.settings, journal: all.journal, model: all.model, av, took, universe: all.universe, ...(sendArchive ? { archive: all.archive } : {}) });
   } catch (e: any) {
     return json({ error: `Server storage error: ${e?.message ?? e}` }, 500);
   }
