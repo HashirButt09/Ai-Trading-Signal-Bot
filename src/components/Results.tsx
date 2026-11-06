@@ -1,3 +1,4 @@
+import { genLabel, isGen } from '../engine/inventor';
 import { useMemo, useState } from 'react';
 import { ALL_STRATEGIES, EXIT_LABEL, EXIT_PLANS, STOP_LABEL, STOP_WIDTHS, LIMIT_BARS, LIMIT_PULLBACK_R, PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type JournalEntry, type StrategyId } from '../engine/types';
 import { btcFilter, computeStats, entryReport, exitReport, independentCount, stopChoices, stopReport } from '../engine/journal';
@@ -117,7 +118,7 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
               </tr>
               {rows.map((r) => (
                 <tr key={r.k} className={pick === r.k ? 'sel' : ''} style={{ cursor: 'pointer' }} onClick={() => setPick(pick === r.k ? 'ALL' : r.k)}>
-                  <td>{STRATEGY_LABEL[r.k]}</td>
+                  <td>{(genLabel(r.k, s) ?? STRATEGY_LABEL[r.k])}</td>
                   <td>{accCell(r.acc)}</td>
                   <td>{rCell(r.avgR, r.closed)}</td>
                   <td>{r.n}</td>
@@ -139,7 +140,7 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
 
       <div className="card">
         <div className="row between wrap gap">
-          <div className="label">{pick === 'ALL' ? 'All strategies' : STRATEGY_LABEL[pick]} · trades ({list.length})</div>
+          <div className="label">{pick === 'ALL' ? 'All strategies' : (genLabel(pick, s) ?? STRATEGY_LABEL[pick])} · trades ({list.length})</div>
           {seg<Filter>(filter, setFilter, [['all', 'All'], ['profit', 'Profit'], ['loss', 'Loss'], ['open', 'Open']])}
         </div>
         <div className="scroll" style={{ maxHeight: 420 }}>
@@ -154,7 +155,7 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
                     <td>{localTime(e.signal.time)}</td>
                     <td>{e.signal.symbol.replace('USDT', '')}</td>
                     <td className={e.signal.side === 'LONG' ? 'up-t' : 'down-t'}>{e.signal.side}</td>
-                    <td>{STRATEGY_LABEL[e.signal.strategy]}</td>
+                    <td>{(genLabel(e.signal.strategy, s) ?? STRATEGY_LABEL[e.signal.strategy])}</td>
                     <td>{e.outcome === 'OPEN' ? 'open' : e.rNet > 0 ? 'profit' : e.outcome === 'EXPIRED' && Math.abs(e.rNet) < 0.01 ? 'break-even' : 'loss'}</td>
                     <td className={e.rNet > 0 ? 'up-t' : e.rNet < 0 ? 'down-t' : ''}>{e.outcome === 'OPEN' ? '' : num(e.rNet, 2)}</td>
                     <td className="muted">{e.status === 'ACTIVE' ? 'you' : e.status === 'PAUSED' && PROBATION.has(e.signal.strategy) ? 'learning' : e.status.toLowerCase()}</td>
@@ -175,11 +176,11 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
           {s.profitOnly ? `A strategy sends you signals only while its newest ${GATE_WINDOW} independent results average at least +${GATE_ON_R}R after fees (it needs ${GATE_MIN} results first). Every setup keeps being tracked, so a blocked strategy that recovers is let through again by itself, and one that starts losing is stopped.` : 'Switched off in Settings: every strategy can send signals.'}
         </div>
         <div className="row gap wrap small" style={{ marginTop: 6 }}>
-          {ALL_STRATEGIES.map((k) => pg[k] ?? { strategy: k, n: 0, avgR: 0, allowed: false, why: 'no results yet' })
+          {ALL_STRATEGIES.filter((k) => !isGen(k) || s.gen?.some((g) => g.id === k)).map((k) => pg[k] ?? { strategy: k, n: 0, avgR: 0, allowed: false, why: 'no results yet' })
             .sort((a, b) => Number(b.allowed) - Number(a.allowed) || b.avgR - a.avgR)
             .map((g) => (
               <span key={g.strategy} className="pill" title={g.why}>
-                <span className={g.allowed ? 'up-t' : 'muted'}>{g.allowed ? '✓' : '·'}</span> {STRATEGY_LABEL[g.strategy]} <span className={g.avgR >= 0 ? 'up-t' : 'down-t'}>{g.n ? `${num(g.avgR, 2)}R` : ''}</span> <span className="muted">{g.n}/{GATE_WINDOW}</span>
+                <span className={g.allowed ? 'up-t' : 'muted'}>{g.allowed ? '✓' : '·'}</span> {(genLabel(g.strategy, s) ?? STRATEGY_LABEL[g.strategy])} <span className={g.avgR >= 0 ? 'up-t' : 'down-t'}>{g.n ? `${num(g.avgR, 2)}R` : ''}</span> <span className="muted">{g.n}/{GATE_WINDOW}</span>
               </span>
             ))}
         </div>
@@ -198,7 +199,7 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
             <tbody>
               {FILTERS.map((f, i) => {
                 const o = lab.overall[i];
-                const on = Object.entries(lab.active).filter(([, ids]) => ids?.includes(f.id)).map(([k]) => STRATEGY_LABEL[k as StrategyId]);
+                const on = Object.entries(lab.active).filter(([, ids]) => ids?.includes(f.id)).map(([k]) => (genLabel(k as StrategyId, s) ?? STRATEGY_LABEL[k as StrategyId]));
                 return (
                   <tr key={f.id}>
                     <td title={f.why}>{f.label}</td>
@@ -230,7 +231,7 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
             <tbody>
               {rows.filter((r) => r.ex.n > 0).map((r) => (
                 <tr key={r.k}>
-                  <td>{STRATEGY_LABEL[r.k]}</td>
+                  <td>{(genLabel(r.k, s) ?? STRATEGY_LABEL[r.k])}</td>
                   <td>{r.ex.n}{r.ex.n < PROMOTE_MIN_TRADES ? `/${PROMOTE_MIN_TRADES}` : ''}</td>
                   {EXIT_PLANS.map((p) => (
                     <td key={p} className={r.ex.choice === p ? 'sel' : ''}>
@@ -264,7 +265,7 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
                 const k = ALL_STRATEGIES.find((x) => stopBy[x] === r)!;
                 return (
                   <tr key={k}>
-                    <td>{STRATEGY_LABEL[k]}</td>
+                    <td>{(genLabel(k, s) ?? STRATEGY_LABEL[k])}</td>
                     <td>{r.n}{r.n < PROMOTE_MIN_TRADES ? `/${PROMOTE_MIN_TRADES}` : ''}</td>
                     <td>{pct(r.hunted, 0)}</td>
                     {STOP_WIDTHS.map((w) => <td key={w} className={r.choice === w ? 'sel' : ''}>{rCell(r.widths[w].avgR, r.n)} <span className="muted">· {pct(r.widths[w].winRate, 0)}</span></td>)}
@@ -290,7 +291,7 @@ export function Results({ scanner, onShow, took = {} }: { scanner: Scanner; onSh
             <tbody>
               {rows.filter((r) => r.en.n > 0).map((r) => (
                 <tr key={r.k}>
-                  <td>{STRATEGY_LABEL[r.k]}</td>
+                  <td>{(genLabel(r.k, s) ?? STRATEGY_LABEL[r.k])}</td>
                   <td>{r.en.n}{r.en.n < PROMOTE_MIN_TRADES ? `/${PROMOTE_MIN_TRADES}` : ''}</td>
                   <td className={r.en.choice === 'MARKET' ? 'sel' : ''}>{rCell(r.en.market.avgR, r.en.n)} <span className="muted">· {pct(r.en.market.winRate, 0)}</span></td>
                   <td className={r.en.choice === 'LIMIT' ? 'sel' : ''}>{rCell(r.en.limit.avgR, r.en.n)} <span className="muted">· {pct(r.en.limit.winRate, 0)}</span></td>

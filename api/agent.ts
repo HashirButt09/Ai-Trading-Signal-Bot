@@ -13,6 +13,20 @@ import { hasProfile, MAIN } from '../src/engine/profiles.js';
 import { loadAgent, resumeAgent, runAgent, undoLast, BOUNDS } from '../server/agent.js';
 import { geminiJson, geminiReady } from '../server/gemini.js';
 import { vapidReady, webPushSender } from '../server/push.js';
+import { loadInventor, runInventor } from '../server/inventor.js';
+
+/** the strategy inventor (also run once a day by /api/daily?job=invent) */
+export async function invent(kv: Kv) {
+  if ((await kv.cmd('SET', 'st:inventlock', '1', 'NX', 'EX', 90)) !== 'OK') return json({ error: 'The strategy inventor is already running. Try again in a minute.' }, 409);
+  try {
+    const r = await runInventor({ kv, history: (s, i, n) => fetchHistory(s, i, n), gemini: geminiReady() ? geminiJson : null, send: vapidReady() ? webPushSender : undefined });
+    return json({ ok: true, ...r });
+  } catch (e: any) {
+    return json({ error: `Inventor failed: ${String(e?.message ?? e).slice(0, 300)}` }, 500);
+  } finally {
+    await kv.cmd('DEL', 'st:inventlock').catch(() => {});
+  }
+}
 
 /** the profile a request asks for, if it exists (unknown ids fall back to the main bot) */
 async function profileOf(kv: Kv, raw: unknown): Promise<string> {
@@ -56,7 +70,7 @@ export async function GET(req: Request): Promise<Response> {
   const denied = checkApp(req);
   if (denied) return denied;
   const state = await loadAgent(kv, profile);
-  return json({ ...state, profile, gemini: geminiReady(), bounds: BOUNDS });
+  return json({ ...state, profile, gemini: geminiReady(), bounds: BOUNDS, inventor: await loadInventor(kv) });
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -67,6 +81,7 @@ export async function POST(req: Request): Promise<Response> {
   const body: any = await req.json().catch(() => ({}));
   const profile = await profileOf(kv, body?.profile);
   if (body?.action === 'run') return run(kv, 'manual', profile);
+  if (body?.action === 'invent') return invent(kv);
   if (body?.action === 'resume') return json({ ok: true, run: await resumeAgent(kv, Date.now(), profile) });
   if (body?.action === 'undo') {
     try {

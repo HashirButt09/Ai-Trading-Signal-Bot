@@ -56,7 +56,7 @@ export interface ServerStatus {
   errors: Record<string, string>; // per symbol
   lastSignalAt: number;
   settingsAt: number; // when settings last changed on the server
-  settingsBy: 'app' | 'agent' | '';
+  settingsBy: 'app' | 'agent' | 'inventor' | '';
   profiles?: Record<string, ProfileStatus>; // scan health of the extra timeframe bots
   maint?: Record<string, number>; // last tidy-up + retrain of each bot's archive
   av?: Record<string, number>; // archive version of each bot (the app re-downloads it only when it changed)

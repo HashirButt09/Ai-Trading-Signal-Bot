@@ -1,3 +1,4 @@
+import { genLive, specText, type InventorState } from '../engine/inventor';
 import { useEffect, useState } from 'react';
 import type { Settings } from '../engine/types';
 import type { Scanner } from '../lib/scanner';
@@ -57,7 +58,7 @@ function Windows({ cur, ch }: { cur?: Ev; ch?: Ev }) {
 }
 
 export function Agent({ scanner, settings, onChange }: { scanner: Scanner; settings: Settings; onChange: (s: Settings) => void }) {
-  const [data, setData] = useState<{ runs: Run[]; lastChange: any; gemini: boolean; paused: null | { at: number; reason: string }; keptStreak: number } | null>(null);
+  const [data, setData] = useState<{ runs: Run[]; lastChange: any; gemini: boolean; paused: null | { at: number; reason: string }; keptStreak: number; inventor?: InventorState } | null>(null);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
   const [open, setOpen] = useState<number | null>(0);
@@ -79,7 +80,7 @@ export function Agent({ scanner, settings, onChange }: { scanner: Scanner; setti
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remote, profile]);
 
-  const act = async (a: 'run' | 'undo' | 'resume') => {
+  const act = async (a: 'run' | 'undo' | 'resume' | 'invent') => {
     setBusy(a);
     setErr('');
     try {
@@ -106,8 +107,55 @@ export function Agent({ scanner, settings, onChange }: { scanner: Scanner; setti
   }
 
   const runs = data?.runs ?? [];
+  const inv = data?.inventor;
+  const all = scanner.history;
+  const live = genLive(all, scanner.settings);
   return (
     <div className="page" style={{ paddingBottom: 0 }}>
+      <div className="card form">
+        <div className="row between wrap gap">
+          <div className="label">Strategy inventor: new strategies the bot designs and tests itself</div>
+          <button className="btn small primary" disabled={!!busy} onClick={() => act('invent')}>{busy === 'invent' ? 'Inventing… (up to a minute)' : 'Invent now'}</button>
+        </div>
+        <div className="muted small">
+          Once a day {data?.gemini ? 'Gemini designs' : 'the bot designs'} new strategy ideas as rules (never code) from the readings the bot already has, using what worked and what failed so far. The bot also makes small variations of its best ideas. Every idea is backtested on the last ~10 days of 8 liquid coins after fees; only good ones get one of 6 slots. They start in learning mode, go live only after 40 good live results, and are retired by themselves if they lose money live.
+        </div>
+        {inv?.runs?.[0] && <div className="small">Last run {new Date(inv.runs[0].at).toLocaleString()}: {inv.runs[0].summary}</div>}
+        <div className="tablewrap">
+          <table className="small">
+            <thead><tr><th style={{ textAlign: 'left' }}>Invented strategy</th><th style={{ textAlign: 'left' }}>Rules</th><th>Backtest</th><th>Live</th><th>Status</th></tr></thead>
+            <tbody>
+              {(scanner.settings.gen ?? []).map((g) => {
+                const L = live[g.id];
+                const h = scanner.health[g.id];
+                return (
+                  <tr key={g.id}>
+                    <td title={g.idea}><b>{g.name}</b><div className="muted">{g.by === 'gemini' ? 'by Gemini' : 'bot variation'} · {new Date(g.since).toLocaleDateString()}</div></td>
+                    <td style={{ textAlign: 'left' }}>{specText(g)}</td>
+                    <td>{g.bt ? `${g.bt.n} · ${r2(g.bt.avgR)} · ${(g.bt.winRate * 100).toFixed(0)}%` : '-'}</td>
+                    <td>{L && L.n ? <span className={L.avgR >= 0 ? 'up-t' : 'down-t'}>{L.n} · {r2(L.avgR)}</span> : '0'}</td>
+                    <td>{!h || h.learning ? 'learning' : h.paused ? 'paused' : <span className="up-t">live</span>}</td>
+                  </tr>
+                );
+              })}
+              {!(scanner.settings.gen ?? []).length && <tr><td colSpan={5} className="muted">No invented strategy yet. The inventor runs once a day, or tap Invent now.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        {!!inv?.tried?.length && (
+          <details>
+            <summary className="small">Ideas tested recently ({inv.tried.length})</summary>
+            <ul className="small">{inv.tried.slice(0, 20).map((t, i) => <li key={i}><b>{t.name}</b> ({t.by === 'gemini' ? 'Gemini' : 'variation'}): {t.verdict}{t.rules ? <span className="muted"> · {t.rules}</span> : null}</li>)}</ul>
+          </details>
+        )}
+        {!!inv?.retired?.length && (
+          <details>
+            <summary className="small">Retired ({inv.retired.length})</summary>
+            <ul className="small">{inv.retired.map((t, i) => <li key={i}><b>{t.name}</b>: {t.why}</li>)}</ul>
+          </details>
+        )}
+      </div>
+
       <div className="card form">
         <div className="row between wrap gap">
           <div className="label">AI agent (self-tuning, runs daily){label}</div>

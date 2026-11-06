@@ -49,7 +49,8 @@ import { PATTERN_INFO } from './patterns.js';
 const STRATS: StrategyId[] = ALL_STRATEGIES.slice(0, 10); // the original playbooks
 const LATER: StrategyId[] = ALL_STRATEGIES.slice(10, 14); // learning batch 1
 const LATER2: StrategyId[] = ALL_STRATEGIES.slice(14, 20); // learning batch 2
-const LATER3: StrategyId[] = ALL_STRATEGIES.slice(20); // your TradingView scripts (SMC, Cipher B, XABC) and later
+const LATER3: StrategyId[] = ALL_STRATEGIES.slice(20, 23); // your TradingView scripts (SMC, Cipher B, XABC)
+const LATER4: StrategyId[] = ALL_STRATEGIES.slice(23); // strategies the bot invents itself (GEN_1..6)
 const clip = (x: number | undefined, lim: number) => Math.max(-lim, Math.min(lim, x ?? 0));
 
 export function featurize(s: Signal): number[] {
@@ -80,7 +81,9 @@ export function featurize(s: Signal): number[] {
     clip(f.pdlDist, 10),
     // batch 3: your scripts as playbooks, plus their readings, order flow, levels, coin group, calendar
     ...LATER3.map((k) => (s.strategy === k ? 1 : 0)),
-    ...EXTRA_KEYS.map((_, j) => clip(Number.isFinite(f.extra?.[j]) ? f.extra![j] : 0, 10))
+    ...EXTRA_KEYS.map((_, j) => clip(Number.isFinite(f.extra?.[j]) ? f.extra![j] : 0, 10)),
+    // batch 4: the bot's own invented strategies
+    ...LATER4.map((k) => (s.strategy === k ? 1 : 0))
   ];
 }
 

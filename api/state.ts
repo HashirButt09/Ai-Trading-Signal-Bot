@@ -121,7 +121,8 @@ export async function POST(req: Request): Promise<Response> {
     const bump = { ...st.status, ver: st.status.ver + 1 };
     switch (body?.action) {
       case 'settings': {
-        const s = cleanSettings((body.settings ?? {}) as Partial<Settings>);
+        // the invented strategies are managed by the server's inventor only: the app never overwrites them
+        const s = { ...cleanSettings((body.settings ?? {}) as Partial<Settings>), gen: st.settings.gen ?? [] };
         await kv.pipe(saveCmds({ settings: s, status: { ...bump, settingsAt: Date.now(), settingsBy: 'app' } }));
         return json({ ok: true, settings: s, ver: bump.ver });
       }

@@ -6,6 +6,7 @@ import { buildCandleScenario, buildChartScenario, buildScenario } from './scenar
 import { CHART_FAMILY, CHART_NAME, detectChartPattern } from './chartpatterns.js';
 import { detectCandles, PATTERN_INFO } from './patterns.js';
 import { TF_MS } from './time.js';
+import { genFires, specText, type GenSpec } from './inventor.js';
 import { rsi, vwap } from './ta.js';
 import { calendar, cipher, coinGroup, COIN_GROUPS, cvdDivergence, cvdSlope, delta, openFvgs, prevWeek, structure, volumeProfile, xabc, type Cipher, type Structure } from './flow.js';
 
@@ -100,6 +101,7 @@ interface Raw {
   level?: number; // key level of the newer playbooks (broken level, VWAP, order block edge, band)
   cipherDiv?: boolean;
   xabc?: { x: number; a: number; b: number; c: number; bLevel: number };
+  gen?: GenSpec;
 }
 
 // ---------------- candlestick reversal (from the pattern notes) ----------------
@@ -915,6 +917,13 @@ export function evaluate(
     if (!raw && en.SMC_CHOCH_FVG) raw = smcChochFvg(L, i, settings.tpR);
     if (!raw && en.CIPHER_B) raw = cipherB(L, i, regime, settings.tpR);
     if (!raw && en.XABC_FIB) raw = xabcFib(L, i, regime, settings.tpR);
+    // strategies the bot invented itself (rule sets from Gemini or its own mutations)
+    for (const g of settings.gen ?? []) {
+      if (raw) break;
+      if (!en[g.id]) continue;
+      const hit = genFires(g, L, H, i, regime, ri.adx, symbol, step);
+      if (hit) raw = { strategy: g.id, side: hit.side, entry: hit.entry, sl: hit.sl, tp: hit.tp, trendAligned: hit.trendAligned, gen: g };
+    }
   }
 
   if (!raw) return { regime, adx: ri.adx, signal: null };
@@ -946,7 +955,10 @@ export function evaluate(
     side: raw.side, symbol, entry: raw.entry, sl: raw.sl, tp: raw.tp, rr, leverage: plan.leverage, slPct: plan.slPct,
     volRatio: features.volRatio, regime
   };
-  const scenario = raw.chart
+  const scenario = raw.gen
+    ? `${raw.gen.name} (a strategy the bot invented itself${raw.gen.by === 'gemini' ? ' with Gemini' : ''}): ${raw.gen.idea} Its rules held on this candle: ${specText(raw.gen)}.` +
+      ` Entry ${raw.entry}, stop ${raw.sl.toPrecision(6)} (${(plan.slPct * 100).toFixed(2)}% away), target ${raw.tp.toPrecision(6)} (${rr.toFixed(2)}R). It is in learning mode until its own live results prove it.`
+    : raw.chart
     ? buildChartScenario({ ...base, kind: raw.pattern!, name: CHART_NAME[raw.pattern as keyof typeof CHART_NAME], tf: settings.htf, level: raw.chart.level, height: raw.chart.height })
     : raw.candle
       ? buildCandleScenario({ ...base, kind: raw.pattern!, name: PATTERN_INFO[raw.pattern!].name, tf: settings.ltf, level: raw.entry, height: 0, move: raw.candle.move })

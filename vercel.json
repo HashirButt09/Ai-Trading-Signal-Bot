@@ -85,6 +85,10 @@
     {
       "path": "/api/daily?job=watch&h=22",
       "schedule": "37 22 * * *"
+    },
+    {
+      "path": "/api/daily?job=invent",
+      "schedule": "23 1 * * *"
     }
   ]
 }

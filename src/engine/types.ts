@@ -1,3 +1,4 @@
+import type { GenSpec } from './inventor.js';
 export interface Candle {
   t: number; // open time (ms)
   o: number;
@@ -33,7 +34,14 @@ export type StrategyId =
   | 'EMA200_BOUNCE'
   | 'SMC_CHOCH_FVG'
   | 'CIPHER_B'
-  | 'XABC_FIB';
+  | 'XABC_FIB'
+  // strategies invented by the bot (Gemini / mutations), rule sets stored in settings.gen
+  | 'GEN_1'
+  | 'GEN_2'
+  | 'GEN_3'
+  | 'GEN_4'
+  | 'GEN_5'
+  | 'GEN_6';
 
 export const STRATEGY_LABEL: Record<StrategyId, string> = {
   TREND_FVG_RETEST: 'Trend FVG Retest',
@@ -58,7 +66,13 @@ export const STRATEGY_LABEL: Record<StrategyId, string> = {
   EMA200_BOUNCE: 'EMA 200 Trend Bounce',
   SMC_CHOCH_FVG: 'SMC CHoCH + FVG Retest',
   CIPHER_B: 'Cipher B Dot + Divergence',
-  XABC_FIB: 'XABC Fibonacci (Trend Fib)'
+  XABC_FIB: 'XABC Fibonacci (Trend Fib)',
+  GEN_1: 'AI idea 1',
+  GEN_2: 'AI idea 2',
+  GEN_3: 'AI idea 3',
+  GEN_4: 'AI idea 4',
+  GEN_5: 'AI idea 5',
+  GEN_6: 'AI idea 6'
 };
 export const ALL_STRATEGIES = Object.keys(STRATEGY_LABEL) as StrategyId[];
 
@@ -69,7 +83,8 @@ export const ALL_STRATEGIES = Object.keys(STRATEGY_LABEL) as StrategyId[];
 export const PROBATION: ReadonlySet<StrategyId> = new Set<StrategyId>([
   'BREAK_RETEST', 'VWAP_RECLAIM', 'ORDER_BLOCK', 'BB_SQUEEZE',
   'DAY_SWEEP', 'FUNDING_FADE', 'RSI_DIVERGENCE', 'SESSION_ORB', 'DONCHIAN_BREAKOUT', 'EMA200_BOUNCE',
-  'SMC_CHOCH_FVG', 'CIPHER_B', 'XABC_FIB'
+  'SMC_CHOCH_FVG', 'CIPHER_B', 'XABC_FIB',
+  'GEN_1', 'GEN_2', 'GEN_3', 'GEN_4', 'GEN_5', 'GEN_6'
 ]);
 
 /**
@@ -211,7 +226,8 @@ export interface Settings {
   marginUsd: number; // margin per trade
   maxLeverage: number;
   minSlPct: number; // reject stops tighter than this (fraction)
-  minSlFloor: number; // your floor for the minimum stop distance (fraction, 0 = off); the agent's tuning can never go below it
+  minSlFloor: number;
+  gen?: GenSpec[]; // strategies the bot invented itself (rule sets, see inventor.ts) // your floor for the minimum stop distance (fraction, 0 = off); the agent's tuning can never go below it
   takerFee: number; // per side (fraction)
   slippage: number; // round trip (fraction)
   makerFee: number; // per side for limit (maker) orders (fraction)
@@ -281,6 +297,11 @@ export function migrateSettings<T extends Partial<Settings>>(s: T): T {
 /** true when a journal entry must not be used for learning, health, the agent or progress */
 export function isIgnored(e: JournalEntry, s?: Partial<Settings> | null): boolean {
   const end = e.resolvedAt ?? e.signal.time;
+  // an invented strategy's slot may have held an older idea: only results of the current one count
+  if (e.signal.strategy.startsWith('GEN_')) {
+    const g = s?.gen?.find((x) => x.id === e.signal.strategy);
+    if (!g || e.signal.time < g.since) return true;
+  }
   if (end < parseIgnoreBefore(s?.ignoreBefore)) return true;
   const from = s?.ignoreFrom ?? BUG_WINDOW_FROM;
   const to = s?.ignoreTo ?? BUG_WINDOW_TO;
@@ -351,7 +372,13 @@ export const DEFAULT_SETTINGS: Settings = {
     EMA200_BOUNCE: true,
     SMC_CHOCH_FVG: true,
     CIPHER_B: true,
-    XABC_FIB: true
+    XABC_FIB: true,
+    GEN_1: true,
+    GEN_2: true,
+    GEN_3: true,
+    GEN_4: true,
+    GEN_5: true,
+    GEN_6: true
   },
   metaThreshold: 0.5,
   metaMinSamples: 40,
