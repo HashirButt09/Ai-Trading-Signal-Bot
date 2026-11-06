@@ -97,6 +97,9 @@ export function Agent({ scanner, settings, onChange }: { scanner: Scanner; setti
     }
   };
 
+  // every hook runs on every render, before any early return
+  const live = useMemo(() => genLive(scanner.history, scanner.settings), [scanner.history, scanner.settings]);
+
   if (!remote) {
     return (
       <div className="page" style={{ paddingBottom: 0 }}>
@@ -110,7 +113,6 @@ export function Agent({ scanner, settings, onChange }: { scanner: Scanner; setti
 
   const runs = data?.runs ?? [];
   const inv = data?.inventor;
-  const live = useMemo(() => genLive(scanner.history, scanner.settings), [scanner.history, scanner.settings]);
   return (
     <div className="page" style={{ paddingBottom: 0 }}>
       <div className="card form">
