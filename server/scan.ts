@@ -145,7 +145,11 @@ async function scanProfile(
       try {
         const [L, H] = await Promise.all([d.klines(sym, s.ltf, LTF_LIMIT), d.klines(sym, s.htf, HTF_LIMIT)]);
         if (L.length > WARMUP && H.length > 60) data.set(sym, { L, H });
-        else errors[errKey(sym)] = 'not enough candle history';
+        else {
+          errors[errKey(sym)] = 'not enough candle history';
+          // look again at the next candle, not every minute (a coin stuck here would keep the scanner from resting)
+          cursor[`${sym}|${s.ltf}`] = Math.floor(now / TF_MS[s.ltf]) * TF_MS[s.ltf] - TF_MS[s.ltf];
+        }
       } catch (e: any) {
         const msg = String(e?.message ?? e).slice(0, 200);
         if (msg.includes('Invalid symbol') || msg.includes('-1121')) {
@@ -567,6 +571,14 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
 
     // how long a full scan takes: the automatic coin list grows or shrinks with it
     const took = Date.now() - started;
+    // the automatic coin list, when it is due and this scan left time for it (also done on quiet minutes)
+    if (shared.settings.autoCoins && d.universe && (!shared.universe || now - shared.universe.at >= UNIVERSE_EVERY_MS) && took < 25_000) {
+      try {
+        report.universe = await refreshUniverse(d.kv, d.universe, shared.settings, st.scanMs, now, d.send);
+      } catch (e: any) {
+        report.errors['coin list'] = String(e?.message ?? e).slice(0, 160);
+      }
+    }
     const scanMs = report.processed.length >= 5 ? Math.round(st.scanMs ? 0.7 * st.scanMs + 0.3 * took : took) : st.scanMs;
     st = {
       ...st,

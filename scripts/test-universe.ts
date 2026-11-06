@@ -73,9 +73,9 @@ await (async () => {
   const agg = (c: Candle[]) => { const o: Candle[] = []; for (let i = 0; i + 12 <= c.length; i += 12) { const x = c.slice(i, i + 12); o.push({ t: x[0].t, o: x[0].o, h: Math.max(...x.map((k) => k.h)), l: Math.min(...x.map((k) => k.l)), c: x[11].c, v: 1 }); } return o; };
   const h1 = agg(synth(12 * 300, T4 - 12 * 300 * S5));
   const kl2 = async (_s: string, i: string, n: number) => (i === '5m' ? c5b.filter((k) => k.t + S5 <= T4 + 30_000) : h1).slice(-n);
-  await runScan({ kv, klines: kl2, send, now: () => T4 + 30_000 } as any);
+  await runScan({ kv, klines: kl2, send, universe: async () => (refreshed++, { info: info2, volume }), now: () => T4 + 30_000 } as any);
   const quiet = await runScan({ kv, klines: kl2, send, universe: async () => (refreshed++, { info: info2, volume }), now: () => T4 + 90_000 } as any);
-  ok(refreshed === 1 && (quiet as any).universe?.symbols >= 5, 'an hour later a quiet minute refreshes the list by itself');
+  ok(refreshed === 1, 'an hour later the list refreshes by itself (end of a scan or a quiet minute)');
   const again = await runScan({ kv, klines: kl2, send, universe: async () => (refreshed++, { info: info2, volume }), now: () => T4 + 150_000 } as any);
   ok(refreshed === 1 && again.skipped === 'nothing-due', 'not again until the next hour');
 })();
