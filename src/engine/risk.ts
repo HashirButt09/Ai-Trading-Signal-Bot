@@ -24,7 +24,8 @@ export function planRisk(entry: number, sl: number, s: Settings): RiskPlan {
   if (!(entry > 0) || !(sl > 0)) return fail('Invalid prices');
   const slPct = Math.abs(entry - sl) / entry;
   if (!(slPct > 0)) return fail('Zero stop distance');
-  if (slPct < s.minSlPct) return fail(`Stop tighter than ${(s.minSlPct * 100).toFixed(2)}% - fees/slippage would dominate`, slPct);
+  const minSl = Math.max(s.minSlPct, s.minSlFloor ?? 0); // the agent tunes minSlPct, never below your floor
+  if (slPct < minSl) return fail(`Stop tighter than ${(minSl * 100).toFixed(2)}% - fees/slippage would dominate`, slPct);
 
   const costPct = 2 * s.takerFee + s.slippage;
   const perNotional = slPct + costPct;

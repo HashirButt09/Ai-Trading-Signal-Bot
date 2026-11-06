@@ -211,6 +211,7 @@ export interface Settings {
   marginUsd: number; // margin per trade
   maxLeverage: number;
   minSlPct: number; // reject stops tighter than this (fraction)
+  minSlFloor: number; // your floor for the minimum stop distance (fraction, 0 = off); the agent's tuning can never go below it
   takerFee: number; // per side (fraction)
   slippage: number; // round trip (fraction)
   makerFee: number; // per side for limit (maker) orders (fraction)
@@ -319,6 +320,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxOpenTrades: 2,
   maxNewPerCandle: 1,
   minSlPct: 0.0015,
+  minSlFloor: 0,
   takerFee: 0.0004,
   slippage: 0.0005,
   makerFee: 0.0002,

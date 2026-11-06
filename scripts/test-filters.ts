@@ -4,6 +4,7 @@ import { DEFAULT_SETTINGS, EXTRA_KEYS, type JournalEntry, type Settings, type St
 import { blockedBy, counterTrend, counterTrendProven, etToUtc, filterBits, FILTER_MIN, FILTERS, gateBlock, learnFilters, nearNews, NEWS_EVENTS, profitGate, riskBlock, sameSideCount } from '../src/engine/filters';
 import { newEntry } from '../src/engine/journal';
 import { coinGroup } from '../src/engine/flow';
+import { planRisk } from '../src/engine/risk';
 
 let fails = 0;
 const ok = (c: boolean, m: string) => { console.log(`${c ? 'PASS' : 'FAIL'}  ${m}`); if (!c) fails++; };
@@ -89,6 +90,7 @@ const closed = (strategy: StrategyId, t: number, ex: number[] | undefined, r: nu
   ok(riskBlock(S, 0, 'meme', S.maxPerGroup, 0, 3)?.includes('meme coin group') === true, `coin-group cap: max ${S.maxPerGroup} open per group`);
   ok(riskBlock(S, 0, 'other', 9, 0, 3) === null, 'coins without a known group are not capped together');
   ok(riskBlock(S, 0, 'l1', 0, 3, 3)?.startsWith('max open') === true, 'open-trade slots still apply');
+  ok(!planRisk(100, 99.5, { ...S, minSlPct: 0.001, minSlFloor: 0.006 }).ok && planRisk(100, 99.3, { ...S, minSlPct: 0.001, minSlFloor: 0.006 }).ok, 'your 0.6% stop floor wins even when the agent tuned the minimum lower');
   ok(coinGroup('1000PEPEUSDT') === 'meme' && coinGroup('ETHUSDT') === 'major' && coinGroup('FOOUSDT') === 'other', 'coin groups');
 }
 
