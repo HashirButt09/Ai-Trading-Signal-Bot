@@ -17,10 +17,13 @@ import { ALL_STRATEGIES, type Candle } from '../src/engine/types.js';
 export const REPLAY_DAYS = 90;
 export const REPLAY_PER_STRATEGY = 220; // newest results kept per strategy (keeps the store ~1.5 MB)
 export const REPLAY_REFRESH_MS = 7 * 86_400_000;
+/** bump when the trading rules change in a way that makes older replays outdated: every coin is redone */
+export const REPLAY_VERSION = 2;
 const STATE = (profile: string) => `st:replaystate${profile === MAIN ? '' : `:${profile}`}`;
 
 export interface ReplayState {
   done: Record<string, number>; // symbol -> when it was last replayed
+  version?: number;
   runs: { at: number; symbols: string[]; trades: number; ms: number; note?: string }[];
 }
 
@@ -28,9 +31,9 @@ export async function loadReplayState(kv: Kv, profile = MAIN): Promise<ReplaySta
   try {
     const raw = await kv.cmd('GET', STATE(profile));
     const o = raw ? JSON.parse(String(raw)) : {};
-    return { done: o.done ?? {}, runs: o.runs ?? [] };
+    return { done: o.version === REPLAY_VERSION ? (o.done ?? {}) : {}, runs: o.runs ?? [], version: REPLAY_VERSION };
   } catch {
-    return { done: {}, runs: [] };
+    return { done: {}, runs: [], version: REPLAY_VERSION };
   }
 }
 

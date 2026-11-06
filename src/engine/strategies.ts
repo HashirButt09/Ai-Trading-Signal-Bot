@@ -948,6 +948,19 @@ export function evaluate(
 
   if (!raw) return { regime, adx: ri.adx, signal: null };
 
+  // your minimum stop: a tighter stop is moved out to it (not skipped), so a quick wick through an
+  // obvious level does not take the trade out; the target keeps the strategy's reward-to-risk
+  const floor = settings.minSlFloor ?? 0;
+  if (floor > 0) {
+    const dist = Math.abs(raw.entry - raw.sl);
+    if (dist / raw.entry < floor) {
+      const dir = raw.side === 'LONG' ? 1 : -1;
+      const want = floor * 1.0001 * raw.entry;
+      const rrRaw = Math.abs(raw.tp - raw.entry) / (dist || 1e-12);
+      raw = { ...raw, sl: raw.entry - dir * want, tp: raw.entry + dir * rrRaw * want };
+    }
+  }
+
   const plan = planRisk(raw.entry, raw.sl, settings);
   if (!plan.ok) return { regime, adx: ri.adx, signal: null, note: plan.reason };
 

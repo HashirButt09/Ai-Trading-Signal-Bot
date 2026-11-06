@@ -134,7 +134,7 @@ export function Settings({ value, onChange, scanner }: { value: S; onChange: (s:
           {numField('maxSameSide', 'Max same-direction signals per 6 candles', 1, 'All coins together: many longs at once are one market move, not many trades (0 = no limit)')}
           {numField('tpR', 'Target for trend plays (R)', 0.1, 'Range plays always target the range midpoint')}
           {numField('minSlPct', 'Skip stops tighter than (%)', 0.01, undefined, 100)}
-          {numField('minSlFloor', 'Never allow stops tighter than (%) — your floor', 0.05, 'Tight stops get hunted and fees eat them. The daily agent tunes the minimum stop but can never go below this (0 = off)', 100)}
+          {numField('minSlFloor', 'Never allow stops tighter than (%) — your floor', 0.05, 'Tight stops get hunted and fees eat them. A tighter stop is moved out to this distance (same reward-to-risk, smaller position), never skipped. The daily agent can never go below it (0 = off)', 100)}
           {numField('takerFee', 'Taker fee per side (%)', 0.005, 'Binance futures default 0.04%', 100)}
           {numField('slippage', 'Slippage round trip (%)', 0.005, undefined, 100)}
         </div>

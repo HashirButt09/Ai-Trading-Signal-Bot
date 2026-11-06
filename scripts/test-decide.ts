@@ -59,6 +59,16 @@ for (let i = 3000; i < 5990; i++) { const r = evaluate('BTCUSDT', L, i, H, S).si
   ok(chaseF.pass({ ...s0, features: { ...s0.features, extra: ext } }) === false, "don't-chase filter: a 3 ATR run in the trade direction fails");
 }
 
+// ---------- stop floor widens instead of skipping ----------
+{
+  const SF = { ...S, minSlFloor: 0.006 };
+  const wide: typeof sigs = [];
+  for (let i = 3000; i < 5990; i++) { const r = evaluate('BTCUSDT', L, i, H, SF).signal; if (r) wide.push(r); }
+  ok(wide.length >= sigs.length * 0.9 && wide.every((x) => x.slPct >= 0.006), `a 0.6% stop floor widens tight stops instead of skipping the setup (${wide.length} vs ${sigs.length} setups)`);
+  const pair = wide.find((w) => sigs.some((x) => x.time === w.time && x.strategy === w.strategy && x.slPct < 0.006));
+  ok(!pair || Math.abs(pair.rr - sigs.find((x) => x.time === pair.time && x.strategy === pair.strategy)!.rr) < 0.01, 'the widened trade keeps the strategy\'s reward-to-risk');
+}
+
 // ---------- coin rule ----------
 {
   const mk = (sym: string, i: number, r: number): JournalEntry => ({ ...newEntry({ ...sigs[0], symbol: sym, time: T0 + i * 3_600_000, id: `${sym}${i}` }, 'PAUSED'), outcome: r > 0 ? 'WIN' : 'LOSS', rNet: r, resolvedAt: T0 + i * 3_600_000 + 1 });
