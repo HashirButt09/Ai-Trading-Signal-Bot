@@ -104,15 +104,15 @@ export async function fetchSinglePrice(symbol: string): Promise<number | null> {
  * interest over the last hour (one small request per pair). Best effort with a short overall time limit:
  * whatever is missing is simply unknown.
  */
-export async function fetchMarketCtx(symbols: string[], budgetMs = 8000): Promise<Record<string, { funding?: number; oiChg?: number; qv24?: number }>> {
+export async function fetchMarketCtx(symbols: string[], budgetMs = 8000): Promise<Record<string, { funding?: number; oiChg?: number; qv24?: number; price?: number }>> {
   const until = Date.now() + budgetMs;
-  const out: Record<string, { funding?: number; oiChg?: number; qv24?: number }> = {};
+  const out: Record<string, { funding?: number; oiChg?: number; qv24?: number; price?: number }> = {};
   try {
     // 24h traded value of every pair (one request): how liquid each coin is right now
     const res = await fetch(`${REST_BASE}/fapi/v1/ticker/24hr`, { signal: AbortSignal.timeout(4000) });
     if (res.ok) {
       const want = new Set(symbols);
-      for (const r of (await res.json()) as { symbol: string; quoteVolume: string }[]) if (want.has(r.symbol) && Number.isFinite(+r.quoteVolume)) out[r.symbol] = { qv24: +r.quoteVolume };
+      for (const r of (await res.json()) as { symbol: string; quoteVolume: string; lastPrice: string }[]) if (want.has(r.symbol) && Number.isFinite(+r.quoteVolume)) out[r.symbol] = { qv24: +r.quoteVolume, ...(+r.lastPrice > 0 ? { price: +r.lastPrice } : {}) };
     }
   } catch {
     /* unknown liquidity */

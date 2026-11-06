@@ -1,4 +1,6 @@
 import { genLive, specText, type InventorState } from '../engine/inventor';
+import type { Decisions } from '../engine/decide';
+import { EXIT_LABEL, STRATEGY_LABEL, type StrategyId } from '../engine/types';
 import { useEffect, useMemo, useState } from 'react';
 import type { Settings } from '../engine/types';
 import type { Scanner } from '../lib/scanner';
@@ -58,7 +60,7 @@ function Windows({ cur, ch }: { cur?: Ev; ch?: Ev }) {
 }
 
 export function Agent({ scanner, settings, onChange }: { scanner: Scanner; settings: Settings; onChange: (s: Settings) => void }) {
-  const [data, setData] = useState<{ runs: Run[]; lastChange: any; gemini: boolean; paused: null | { at: number; reason: string }; keptStreak: number; inventor?: InventorState } | null>(null);
+  const [data, setData] = useState<{ runs: Run[]; lastChange: any; gemini: boolean; paused: null | { at: number; reason: string }; keptStreak: number; inventor?: InventorState; replay?: { done: Record<string, number>; runs: { at: number; symbols: string[]; trades: number; note?: string }[] }; decide?: Decisions | null } | null>(null);
   const [busy, setBusy] = useState('');
   const [err, setErr] = useState('');
   const [open, setOpen] = useState<number | null>(0);
@@ -80,7 +82,7 @@ export function Agent({ scanner, settings, onChange }: { scanner: Scanner; setti
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remote, profile]);
 
-  const act = async (a: 'run' | 'undo' | 'resume' | 'invent') => {
+  const act = async (a: 'run' | 'undo' | 'resume' | 'invent' | 'replay') => {
     setBusy(a);
     setErr('');
     try {
@@ -111,6 +113,29 @@ export function Agent({ scanner, settings, onChange }: { scanner: Scanner; setti
   const live = useMemo(() => genLive(scanner.history, scanner.settings), [scanner.history, scanner.settings]);
   return (
     <div className="page" style={{ paddingBottom: 0 }}>
+      <div className="card form">
+        <div className="row between wrap gap">
+          <div className="label">What the bot decided by itself (from live trades + 90 days of replayed history)</div>
+          <button className="btn small" disabled={!!busy} onClick={() => act('replay')}>{busy === 'replay' ? 'Learning 3 coins… (up to a minute)' : 'Learn history now'}</button>
+        </div>
+        <div className="muted small">
+          History replay: {data?.replay ? `${Object.keys(data.replay.done).length} of ${scanner.settings.watchlist.slice(0, 40).length} coins learned from 90 days of candles` : '…'}
+          {data?.replay?.runs?.[0] && <> · last run {new Date(data.replay.runs[0].at).toLocaleString()} ({data.replay.runs[0].symbols.join(', ') || 'nothing due'}, {data.replay.runs[0].trades} trades)</>}. It runs every 2 hours by itself and refreshes each coin weekly. Replayed trades teach the AI and the labs; only live results let a strategy send you signals.
+        </div>
+        {data?.decide ? (
+          <div className="small">
+            Updated {new Date(data.decide.at).toLocaleString()} from {data.decide.n.live} live and {data.decide.n.replay} replayed trades.
+            {' '}Exits changed: {Object.entries(data.decide.exit).filter(([, v]) => v !== 'A').map(([k, v]) => `${STRATEGY_LABEL[k as StrategyId]} → ${EXIT_LABEL[v!]}`).join('; ') || 'none'}.
+            {' '}Wider stops: {Object.entries(data.decide.stop).filter(([, v]) => v !== 'W10').map(([k, v]) => `${STRATEGY_LABEL[k as StrategyId]} ${v === 'W15' ? '1.5x' : '2x'}`).join('; ') || 'none'}.
+            {' '}Limit entries: {Object.entries(data.decide.entry).filter(([, v]) => v === 'LIMIT').map(([k]) => STRATEGY_LABEL[k as StrategyId]).join('; ') || 'none'}.
+            {' '}Filters on: {Object.entries(data.decide.filters).filter(([, v]) => v?.length).map(([k, v]) => `${STRATEGY_LABEL[k as StrategyId]} (${v!.join(', ')})`).join('; ') || 'none yet'}.
+            {' '}Coins avoided: {data.decide.coins.blocked.join(', ') || 'none'}.
+          </div>
+        ) : (
+          <div className="muted small">The first decisions appear after the next upkeep (every 3 hours).</div>
+        )}
+      </div>
+
       <div className="card form">
         <div className="row between wrap gap">
           <div className="label">Strategy inventor: new strategies the bot designs and tests itself</div>

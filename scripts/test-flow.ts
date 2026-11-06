@@ -114,7 +114,7 @@ const mk = walk(3000);
   ok(sat.weekend === 1 && calendar(Date.UTC(2026, 5, 3, 12)).weekend === 0, 'weekend flag');
   ok(beforeFunding.fundingSoon === 1 && calendar(Date.UTC(2026, 5, 3, 8, 5)).fundingSoon === 0, 'flags the 15 minutes before a funding settlement (00 / 08 / 16 UTC)');
   ok(calendar(Date.UTC(2026, 5, 30, 10)).monthEnd === 1, 'month-end flag');
-  ok(EXTRA_KEYS.length === 29, `${EXTRA_KEYS.length} context readings for the AI`);
+  ok(EXTRA_KEYS.length === 32, `${EXTRA_KEYS.length} context readings for the AI`);
 }
 
 console.log(fails ? `\n${fails} FAILED` : '\nAll indicator-engine checks passed');

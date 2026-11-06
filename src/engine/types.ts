@@ -99,7 +99,10 @@ export const EXTRA_KEYS = [
   'pwhDist', 'pwlDist', 'pocDist', 'inValue', 'roomR', // big levels and volume profile
   'g_major', 'g_l1', 'g_l2', 'g_meme', 'g_ai', 'g_defi', 'g_other', // coin group
   'weekend', 'dowSin', 'dowCos', 'monthEnd', 'fundingSoon', // calendar
-  'liq' // 24h traded value (log10 of USDT)
+  'liq', // 24h traded value (log10 of USDT)
+  'chase', // how far price already ran in the trade direction over the last 3 candles (ATR): high = chasing
+  'confluence', // how many independent readings agree with the trade (0-10)
+  'htf4Agree' // the bigger trend (4x the regime timeframe): +1 agrees, -1 against, 0 flat
 ] as const;
 export type ExtraKey = (typeof EXTRA_KEYS)[number];
 
@@ -170,6 +173,7 @@ export interface MarketCtx {
   funding?: number; // current funding rate (fraction per 8h, e.g. 0.0001 = 0.01%)
   oiChg?: number; // open interest change over the last hour (fraction)
   qv24?: number; // traded value over the last 24 hours (USDT)
+  price?: number; // last traded price when the scan started (to catch signals that arrive too late)
 }
 /** trades a learning strategy needs before it can go live */
 export const PROMOTE_MIN_TRADES = 40;

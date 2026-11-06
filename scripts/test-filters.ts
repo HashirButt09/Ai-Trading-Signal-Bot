@@ -15,7 +15,7 @@ const X = (k: (typeof EXTRA_KEYS)[number]) => EXTRA_KEYS.indexOf(k);
 function extra(over: Partial<Record<(typeof EXTRA_KEYS)[number], number>> = {}) {
   const a = EXTRA_KEYS.map(() => 0);
   a[X('smcAgree')] = 1; a[X('chochAgree')] = 1; a[X('structPos')] = 0.3; a[X('cipherAgree')] = 1; a[X('wt2')] = -0.3;
-  a[X('xabcAgree')] = 0; a[X('cvdAgree')] = 1; a[X('cvdDivAgree')] = 0; a[X('roomR')] = 2; a[X('liq')] = 8.5;
+  a[X('xabcAgree')] = 0; a[X('cvdAgree')] = 1; a[X('cvdDivAgree')] = 0; a[X('roomR')] = 2; a[X('liq')] = 8.5; a[X('chase')] = 0.5; a[X('confluence')] = 7; a[X('htf4Agree')] = 1;
   for (const [k, v] of Object.entries(over)) a[X(k as any)] = v!;
   return a;
 }

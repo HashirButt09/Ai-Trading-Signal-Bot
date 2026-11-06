@@ -810,6 +810,14 @@ export function extraFeatures(L: LtfCtx, H: HtfCtx, i: number, symbol: string, s
     const d = (lv - entry) * dir;
     if (d > 0.05 * risk) room = Math.min(room, d / risk);
   }
+  // chasing: price already ran this far in the trade direction over the last 3 candles
+  const chase = i >= 3 ? ((c[i].c - c[i - 3].c) / a) * dir : 0;
+  // the bigger trend: EMA 80 vs 200 on the regime timeframe (= EMA 20 vs 50 on a 4x bigger timeframe)
+  const big = bigTrend(H);
+  const hi4 = htfIndexAt(H, closeTime, (H.candles[1]?.t ?? 0) - (H.candles[0]?.t ?? 0) || 3_600_000);
+  const htf4 = hi4 >= 200 && Number.isFinite(big.e80[hi4]) && Number.isFinite(big.e200[hi4]) ? Math.sign(big.e80[hi4] - big.e200[hi4]) * dir : 0;
+  // confluence: independent readings that agree with the trade
+  const confluence = [S.dir[i] * dir > 0, chochAgree > 0, dot * dir >= 0 && mfi > 0, (Number.isFinite(sl10) ? sl10 * dir : 0) > 0, cvdDiv >= 0, inFvg >= 0, xAgree >= 0, room >= 1.5, structPos <= 0.6, htf4 > 0].filter(Boolean).length;
   // coin group, calendar, liquidity
   const g = coinGroup(symbol);
   const cal = calendar(closeTime);
@@ -822,8 +830,20 @@ export function extraFeatures(L: LtfCtx, H: HtfCtx, i: number, symbol: string, s
     pwhDist, pwlDist, pocDist, inValue, room,
     ...COIN_GROUPS.map((x) => (x === g ? 1 : 0)),
     cal.weekend, cal.dowSin, cal.dowCos, cal.monthEnd, cal.fundingSoon,
-    liq
+    liq,
+    chase, confluence, htf4
   ].map((v) => (Number.isFinite(v) ? +v.toFixed(3) : 0));
+}
+
+const bigCache = new WeakMap<HtfCtx, { e80: number[]; e200: number[] }>();
+function bigTrend(H: HtfCtx) {
+  let b = bigCache.get(H);
+  if (!b) {
+    const cl = H.candles.map((k) => k.c);
+    b = { e80: ema(cl, 80), e200: ema(cl, 200) };
+    bigCache.set(H, b);
+  }
+  return b;
 }
 
 /** BTC's ATR on the regime timeframe as % of price, at a moment */

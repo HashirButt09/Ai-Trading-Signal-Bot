@@ -1,3 +1,4 @@
+import { DECIDE_MAX_AGE, type Decisions } from '../src/engine/decide.js';
 import type { Candle, JournalEntry, Settings, Signal } from '../src/engine/types.js';
 import { buildHtf } from '../src/engine/regime.js';
 import { buildLtf, evaluate, WARMUP } from '../src/engine/strategies.js';
@@ -6,7 +7,7 @@ import { buildDigest, decodeLite, encodeLite, splitFinished, type Lite } from '.
 import { blockedBy, counterTrend, counterTrendProven, gateBlock, learnFilters, profitGate, riskBlock, sameSideCount } from '../src/engine/filters.js';
 import { coinGroup } from '../src/engine/flow.js';
 import { maintain, MAINT_EVERY_MS } from './maintain.js';
-import type { EntryMode, ExitPlanId, MarketCtx } from '../src/engine/types.js';
+import type { EntryMode, ExitPlanId, MarketCtx, StopWidth } from '../src/engine/types.js';
 import { PROBATION, PROMOTE_MIN_TRADES, STRATEGY_LABEL, type StrategyId } from '../src/engine/types.js';
 import { TF_MS } from '../src/engine/time.js';
 import { playName } from '../src/engine/names.js';
@@ -119,7 +120,8 @@ async function scanProfile(
   fresh: Signal[],
   errors: Record<string, string>,
   digestIn: Lite[] = [],
-  market: Record<string, MarketCtx> = {}
+  market: Record<string, MarketCtx> = {},
+  decided: Decisions | null = null
 ): Promise<ProfileResult> {
   let journal = journalIn;
   let model = modelIn;
@@ -158,15 +160,20 @@ async function scanProfile(
   const hist = () => (archived.length ? [...archived, ...journal] : journal);
   let health = playbookHealth(hist(), s);
   // exit lab: which exit plan each playbook uses for new trades (A unless another plan proved better)
-  const exitChoice = Object.fromEntries(Object.keys(health).map((k) => [k, exitReport(hist(), k as StrategyId, s).choice])) as Record<StrategyId, ExitPlanId>;
+  // the upkeep's decisions (live + archive + 90-day replay) when fresh; otherwise worked out here from recent trades
+  const dc = decided && now - decided.at < DECIDE_MAX_AGE ? decided : null;
+  const exitChoice = Object.fromEntries(Object.keys(health).map((k) => [k, dc?.exit[k as StrategyId] ?? exitReport(hist(), k as StrategyId, s).choice])) as Record<StrategyId, ExitPlanId>;
   // entry lab: market or limit (pullback) entries for new trades, per playbook
   // stop lab: a wider stop (same target, same $ risk) for playbooks whose tight stops keep getting hunted
-  const stopChoice = stopChoices(hist(), s, Object.keys(health) as StrategyId[]);
-  const entryChoice = Object.fromEntries(Object.keys(health).map((k) => [k, entryReport(hist(), k as StrategyId, s).choice])) as Record<StrategyId, EntryMode>;
+  const stopChoice: Record<string, { choice: StopWidth }> = dc
+    ? Object.fromEntries(Object.keys(health).map((k) => [k, { choice: dc.stop[k as StrategyId] ?? 'W10' }]))
+    : stopChoices(hist(), s, Object.keys(health) as StrategyId[]);
+  const entryChoice = Object.fromEntries(Object.keys(health).map((k) => [k, dc?.entry[k as StrategyId] ?? entryReport(hist(), k as StrategyId, s).choice])) as Record<StrategyId, EntryMode>;
+  const coinBlocked = new Set(dc?.coins.blocked ?? []);
   const liveBefore = new Set(Object.values(health).filter((h) => PROBATION.has(h.strategy) && !h.learning).map((h) => h.strategy));
   const btcState = btcFilter(hist(), s);
   // filter lab: which trader's filters have proven themselves for which playbook
-  const lab = learnFilters(hist(), s);
+  const lab = dc ? { ...learnFilters([], s), active: dc.filters } : learnFilters(hist(), s);
   // profit gate (only strategies that are making money lately) and the trend rule, re-judged every scan
   const pgate = profitGate(hist(), s);
   const ctOk = counterTrendProven(hist(), s);
@@ -315,6 +322,7 @@ async function scanProfile(
         if (f) g = { ...g, status: 'FILTERED', reason: `learned filter: ${f.label}` };
         else if (cooling.has(r.signal.strategy)) g = { ...g, status: 'FILTERED', reason: 'cooling off: its last 10 results averaged below -0.5R' };
         else if (s.trendOnly && counterTrend(r.signal) && !ctOk.has(r.signal.strategy)) g = { ...g, status: 'FILTERED', reason: 'trend rule: against the higher-timeframe trend' };
+        else if (s.profitOnly && coinBlocked.has(r.signal.symbol)) g = { ...g, status: 'FILTERED', reason: `coin rule: ${r.signal.symbol} keeps losing lately (all strategies); it comes back when it recovers` };
         else if (s.profitOnly) {
           const why = gateBlock(r.signal, pgate);
           if (why) g = { ...g, status: 'FILTERED', reason: why };
@@ -356,7 +364,13 @@ async function scanProfile(
       };
       const why = riskBlock(s, dayR, grp, groupOpen.get(grp) ?? 0, taken, availableSlots);
       const same = s.maxSameSide > 0 ? sameSideCount(journal, item.signal.side, item.k.t, step) : 0;
+      // delay guard: the signal reaches you at the next scan; if price already ran too far, the entry is gone
+      const px = market[item.signal.symbol]?.price;
+      const risk = Math.abs(item.signal.entry - item.signal.sl) || 1e-12;
+      const ran = px ? ((px - item.signal.entry) / risk) * (item.signal.side === 'LONG' ? 1 : -1) : 0;
       if (why) note(why);
+      else if (px && ran > 0.4) note(`late: price already ran +${ran.toFixed(2)}R towards the target before the signal could be sent (entry missed)`);
+      else if (px && ran < -0.6) note(`late: price already moved ${ran.toFixed(2)}R towards the stop before the signal could be sent`);
       else if (s.maxSameSide > 0 && same >= s.maxSameSide) note(`same-direction cap: already ${same} ${item.signal.side} signals in the last 6 candles (one market move)`);
       if (status === 'ACTIVE') {
         taken++;
@@ -496,7 +510,7 @@ export async function runScan(d: ScanDeps): Promise<ScanReport> {
         continue;
       }
       const state = prof.id === MAIN ? shared : await loadAll(d.kv, prof.id);
-      const r = await scanProfile(d, prof.id, settings, state.journal, state.model, state.cursor, now, fresh, report.errors, state.digest, market);
+      const r = await scanProfile(d, prof.id, settings, state.journal, state.model, state.cursor, now, fresh, report.errors, state.digest, market, state.decide);
       if (r.prunedSymbols.length) {
         settings.watchlist = settings.watchlist.filter((x) => !r.prunedSymbols.includes(x));
         await d.kv.pipe(saveCmds({ settings }));

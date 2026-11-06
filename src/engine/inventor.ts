@@ -48,7 +48,10 @@ export const READINGS = {
   inValue: { about: '1 = price inside the value area of the volume profile', min: 0, max: 1 },
   roomR: { about: 'room to the next big level (day/week high-low, POC) in R', min: 0, max: 10 },
   weekend: { about: '1 = weekend (UTC)', min: 0, max: 1 },
-  fundingSoon: { about: '1 = within 15 min before a funding settlement', min: 0, max: 1 }
+  fundingSoon: { about: '1 = within 15 min before a funding settlement', min: 0, max: 1 },
+  chase: { about: 'how far price already ran in the trade direction over the last 3 candles, in ATR (high = chasing)', min: -10, max: 10 },
+  confluence: { about: 'how many of 10 independent readings agree with the trade (structure, CHoCH, Cipher B, CVD, FVG, XABC, room, zone, bigger trend)', min: 0, max: 10 },
+  htf4Agree: { about: 'trend of a 4x bigger timeframe: +1 agrees with the trade, -1 against, 0 flat', min: -1, max: 1 }
 } as const;
 export type ReadingKey = keyof typeof READINGS;
 export const READING_KEYS = Object.keys(READINGS) as ReadingKey[];

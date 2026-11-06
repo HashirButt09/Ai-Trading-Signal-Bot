@@ -74,7 +74,7 @@ const dMix = prepare('MIXUSDT', flat, agg(flat, 12), buildLtf);
   let sig = null;
   for (let i = 300; i < 3990 && !sig; i++) sig = evaluate('UPUSDT', L, i, H, sg).signal;
   ok(!!sig && sig.strategy === 'GEN_2' && sig.scenario.includes('invented') && PROBATION.has('GEN_2'), 'an invented strategy produces normal signals, in learning mode, with its rules in the write-up');
-  ok(featurize(sig!).length === 74 && featurize(sig!)[69] === 1, 'the AI learns it as its own strategy (feature appended, older models unaffected)');
+  ok(featurize(sig!).length === 77 && featurize(sig!)[69] === 1, 'the AI learns it as its own strategy (feature appended, older models unaffected)');
   const old = { ...newEntry(sig!, 'PAUSED'), outcome: 'LOSS', rNet: -1, resolvedAt: T0 - 1, signal: { ...sig!, time: T0 - 10 } } as JournalEntry;
   ok(genLive([old], sg).GEN_2.n === 0, "results from an older idea in the same slot don't count for the new one");
 }

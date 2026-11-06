@@ -124,7 +124,7 @@ function tr(strategy: StrategyId, rNet: number, t: number, btcAlign = 0, vol = 1
   const g0 = () => tr('TREND_FVG_RETEST', 0, T0, 1).signal;
   const f = featurize(tr('TREND_FVG_RETEST', 0, T0, 1).signal);
   const g = featurize(tr('TREND_FVG_RETEST', 0, T0, 1).signal);
-  ok(f.slice(0, 25).join() === g.slice(0, 25).join() && f.length === 74, `existing feature positions are unchanged, new ones appended (${f.length} features)`);
+  ok(f.slice(0, 25).join() === g.slice(0, 25).join() && f.length === 77, `existing feature positions are unchanged, new ones appended (${f.length} features)`);
   const withExtra = { ...g0(), features: { ...g0().features, extra: Array.from({ length: 29 }, (_, j) => j / 10) } };
   ok(featurize(withExtra).slice(0, 39).join() === featurize(g0()).slice(0, 39).join() && featurize(withExtra)[39 + 5] === 0.5, 'your scripts\' readings and the other context only add features at the very end');
   const early = tr('TREND_FVG_RETEST', 0, T0, 1).signal;

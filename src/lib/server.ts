@@ -76,7 +76,7 @@ export function serverSettings(s: Settings): Partial<Settings> {
   return rest;
 }
 export const agentGet = (passcode: string, profile = 'main') => call<any>(`/api/agent${profile !== 'main' ? `?profile=${encodeURIComponent(profile)}` : ''}`, passcode);
-export const agentPost = (passcode: string, action: 'run' | 'undo' | 'resume' | 'invent', profile = 'main') => call<any>('/api/agent', passcode, { method: 'POST', body: { action, profile } });
+export const agentPost = (passcode: string, action: 'run' | 'undo' | 'resume' | 'invent' | 'replay', profile = 'main') => call<any>('/api/agent', passcode, { method: 'POST', body: { action, profile } });
 
 // null and missing fields are the same thing (the server stores "not tuned yet" as null)
 const stable = (v: unknown): unknown =>

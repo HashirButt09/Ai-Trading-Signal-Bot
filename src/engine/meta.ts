@@ -81,9 +81,11 @@ export function featurize(s: Signal): number[] {
     clip(f.pdlDist, 10),
     // batch 3: your scripts as playbooks, plus their readings, order flow, levels, coin group, calendar
     ...LATER3.map((k) => (s.strategy === k ? 1 : 0)),
-    ...EXTRA_KEYS.map((_, j) => clip(Number.isFinite(f.extra?.[j]) ? f.extra![j] : 0, 10)),
+    ...EXTRA_KEYS.slice(0, 29).map((_, j) => clip(Number.isFinite(f.extra?.[j]) ? f.extra![j] : 0, 10)),
     // batch 4: the bot's own invented strategies
-    ...LATER4.map((k) => (s.strategy === k ? 1 : 0))
+    ...LATER4.map((k) => (s.strategy === k ? 1 : 0)),
+    // batch 5: chasing, confluence, the bigger trend
+    ...EXTRA_KEYS.slice(29).map((_, j) => clip(Number.isFinite(f.extra?.[29 + j]) ? f.extra![29 + j] : 0, 10))
   ];
 }
 

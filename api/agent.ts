@@ -14,6 +14,7 @@ import { loadAgent, resumeAgent, runAgent, undoLast, BOUNDS } from '../server/ag
 import { geminiJson, geminiReady } from '../server/gemini.js';
 import { vapidReady, webPushSender } from '../server/push.js';
 import { loadInventor, runInventor } from '../server/inventor.js';
+import { loadReplayState, runReplay } from '../server/replay.js';
 
 /** the strategy inventor (also run once a day by /api/daily?job=invent) */
 export async function invent(kv: Kv) {
@@ -70,7 +71,8 @@ export async function GET(req: Request): Promise<Response> {
   const denied = checkApp(req);
   if (denied) return denied;
   const state = await loadAgent(kv, profile);
-  return json({ ...state, profile, gemini: geminiReady(), bounds: BOUNDS, inventor: await loadInventor(kv) });
+  const all = await loadAll(kv, profile);
+  return json({ ...state, profile, gemini: geminiReady(), bounds: BOUNDS, inventor: await loadInventor(kv), replay: await loadReplayState(kv), decide: all.decide });
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -82,6 +84,7 @@ export async function POST(req: Request): Promise<Response> {
   const profile = await profileOf(kv, body?.profile);
   if (body?.action === 'run') return run(kv, 'manual', profile);
   if (body?.action === 'invent') return invent(kv);
+  if (body?.action === 'replay') return json(await runReplay({ kv, history: (sym, i, n) => fetchHistory(sym, i, n) }));
   if (body?.action === 'resume') return json({ ok: true, run: await resumeAgent(kv, Date.now(), profile) });
   if (body?.action === 'undo') {
     try {

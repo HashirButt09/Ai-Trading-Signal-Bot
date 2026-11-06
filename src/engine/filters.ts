@@ -38,7 +38,10 @@ export const FILTERS: FilterDef[] = [
   { id: 'liquid', label: 'Liquid coins only', why: 'skip coins trading less than $20M a day (wider spreads, more slippage)', pass: (s) => (has(ex(s, 'liq')) && ex(s, 'liq')! > 0 ? ex(s, 'liq')! >= Math.log10(20e6) : undefined) },
   { id: 'funding', label: 'Not just before funding', why: 'skip the 15 minutes before 00 / 08 / 16 UTC, when stop hunts are common', pass: (s) => (has(ex(s, 'fundingSoon')) ? ex(s, 'fundingSoon') === 0 : undefined) },
   { id: 'weekend', label: 'Not on weekends', why: 'thinner weekend markets fake out more often', pass: (s) => (has(ex(s, 'weekend')) ? ex(s, 'weekend') === 0 : undefined) },
-  { id: 'news', label: 'Not around big US news', why: 'skip 30 min before to 60 min after CPI, jobs report and Fed decisions', pass: (s) => !nearNews(s.time) }
+  { id: 'news', label: 'Not around big US news', why: 'skip 30 min before to 60 min after CPI, jobs report and Fed decisions', pass: (s) => !nearNews(s.time) },
+  { id: 'noChase', label: "Don't chase", why: 'skip when price already ran 2+ ATR in the trade direction over the last 3 candles (selling the low / buying the top)', pass: (s) => (has(ex(s, 'chase')) ? ex(s, 'chase')! < 2 : undefined) },
+  { id: 'confluence', label: 'Confluence 6+ of 10', why: 'only when at least 6 independent readings agree (structure, Cipher B, order flow, FVG, XABC, room, zone, bigger trend)', pass: (s) => (has(ex(s, 'confluence')) ? ex(s, 'confluence')! >= 6 : undefined) },
+  { id: 'htf4', label: 'Bigger trend not against', why: 'skip trades against the trend of a 4x bigger timeframe', pass: (s) => (has(ex(s, 'htf4Agree')) ? ex(s, 'htf4Agree')! >= 0 : undefined) }
 ];
 export const FILTER_BY_ID = Object.fromEntries(FILTERS.map((f) => [f.id, f])) as Record<string, FilterDef>;
 

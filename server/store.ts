@@ -1,3 +1,4 @@
+import type { Decisions } from '../src/engine/decide.js';
 import { DEFAULT_SETTINGS, migrateSettings, normalizeSymbol, type JournalEntry, type Settings } from '../src/engine/types.js';
 import type { MetaModel } from '../src/engine/meta.js';
 import type { Kv } from './kv.js';
@@ -41,7 +42,9 @@ export const PK = (id: string = MAIN) => ({
   archive: pkey(K.archive, id),
   shown: pkey(K.shown, id),
   silent: pkey(K.silent, id),
-  digest: pkey(K.digest, id)
+  digest: pkey(K.digest, id),
+  decide: pkey('st:decide', id), // decisions the upkeep worked out from live + replayed trades
+  replay: pkey('st:replay', id) // trades from the 90-day history replay (compact records)
 });
 
 export interface ProfileStatus {
@@ -94,11 +97,11 @@ export async function loadAll(kv: Kv, profile: string = MAIN, full: boolean | { 
   const k = PK(profile);
   const opt = typeof full === 'object' ? full : { archive: full, recent: undefined };
   full = !!full;
-  const cmds: (string | number)[][] = [['GET', K.settings], ['GET', k.journal], ['GET', k.model], ['GET', k.cursor], ['GET', K.status], ['GET', k.digest]];
+  const cmds: (string | number)[][] = [['GET', K.settings], ['GET', k.journal], ['GET', k.model], ['GET', k.cursor], ['GET', K.status], ['GET', k.digest], ['GET', k.decide]];
   // the app only needs the recent closed trades (Trades tab = 7 days); the agent reads everything
   const n = opt.recent;
   if (full) cmds.push(['LRANGE', k.shown, n ? -n : 0, -1], ['LRANGE', k.silent, n ? -n : 0, -1], opt.archive ? ['LRANGE', k.archive, 0, -1] : ['LLEN', k.archive]);
-  const [s, j, m, c, st, dg, sh, si, ar] = await kv.pipe(cmds);
+  const [s, j, m, c, st, dg, dc, sh, si, ar] = await kv.pipe(cmds);
   const live = parse<JournalEntry[]>(j, []);
   const listOf = <T>(v: unknown): T[] => (Array.isArray(v) ? v.map((x) => parse<T | null>(x, null)).filter((x): x is T => x !== null) : []);
   const closed = full ? [...listOf<JournalEntry>(sh), ...listOf<JournalEntry>(si)] : [];
@@ -112,6 +115,7 @@ export async function loadAll(kv: Kv, profile: string = MAIN, full: boolean | { 
     cursor: parse<Record<string, number>>(c, {}),
     status: { ...EMPTY_STATUS, ...parse<Partial<ServerStatus>>(st, {}) },
     digest: parse<Lite[]>(dg, []),
+    decide: parse<Decisions | null>(dc, null),
     archive: full && opt.archive ? listOf<Rec>(ar) : ([] as Rec[])
   };
 }

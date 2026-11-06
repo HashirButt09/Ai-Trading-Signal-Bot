@@ -89,6 +89,54 @@
     {
       "path": "/api/daily?job=invent",
       "schedule": "23 1 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=1",
+      "schedule": "53 1 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=3",
+      "schedule": "53 3 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=5",
+      "schedule": "53 5 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=7",
+      "schedule": "53 7 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=9",
+      "schedule": "53 9 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=11",
+      "schedule": "53 11 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=13",
+      "schedule": "53 13 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=15",
+      "schedule": "53 15 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=17",
+      "schedule": "53 17 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=19",
+      "schedule": "53 19 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=21",
+      "schedule": "53 21 * * *"
+    },
+    {
+      "path": "/api/daily?job=replay&h=23",
+      "schedule": "53 23 * * *"
     }
   ]
 }

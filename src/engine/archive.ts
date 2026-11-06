@@ -33,7 +33,7 @@ const LIQ = EXTRA_KEYS.indexOf('liq');
 function packExtra(x: number[]): number[] {
   const r2 = (v: number) => Math.round((Number.isFinite(v) ? v : 0) * 100) / 100;
   const g = COIN_GROUPS.findIndex((_, j) => x[G0 + j] === 1);
-  return [...x.slice(0, N_READINGS).map(r2), g < 0 ? COIN_GROUPS.length - 1 : g, r2(x[LIQ])];
+  return [...x.slice(0, N_READINGS).map(r2), g < 0 ? COIN_GROUPS.length - 1 : g, r2(x[LIQ]), ...x.slice(LIQ + 1).map(r2)];
 }
 function unpackExtra(p: number[], closeTime: number): number[] {
   const out = new Array<number>(EXTRA_KEYS.length).fill(0);
@@ -42,6 +42,7 @@ function unpackExtra(p: number[], closeTime: number): number[] {
   const cal = calendar(closeTime);
   [cal.weekend, cal.dowSin, cal.dowCos, cal.monthEnd, cal.fundingSoon].forEach((v, j) => (out[W0 + j] = +v.toFixed(3)));
   out[LIQ] = p[N_READINGS + 1] ?? 0;
+  for (let j = LIQ + 1; j < EXTRA_KEYS.length; j++) out[j] = p[N_READINGS + 2 + (j - LIQ - 1)] ?? NaN; // added later: unknown on older trades
   return out;
 }
 
