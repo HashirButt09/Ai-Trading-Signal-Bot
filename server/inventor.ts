@@ -66,7 +66,8 @@ Readings you may use (key: meaning [allowed range]):
 ${READING_KEYS.map((k) => `${k}: ${READINGS[k].about} [${READINGS[k].min}..${READINGS[k].max}]`).join('\n')}
 Rule set fields: name (short), idea (1-2 sentences: the market logic), when ("TREND" | "RANGE" | "ANY"), withTrend (true = only in the higher-timeframe trend direction),
 conds (2 to 5 conditions {"key","op":">"|"<","v":number}, ALL must hold on the signal candle), stopAtr (0.8-3, stop distance in ATR), targetR (1-4, target as a multiple of the stop).
-Costs are about 0.13% of price per round trip, so very tight stops lose to fees. Avoid rules that almost never fire (more than 5 strict conditions) or always fire.
+Costs are about 0.13% of price per round trip. Stops are never placed tighter than the user's minimum stop (given below): if stopAtr x ATR is smaller, the stop is widened to that minimum and the target scales with it.
+Aim for rules that fire about 1 to 6 times per coin per day on 5m candles: 2-3 conditions with moderate thresholds. Ideas with fewer than ${BT_MIN_N} backtest trades are thrown away, so do not make them too strict.
 Each idea is backtested on the last ~10 days of 10 liquid coins after fees and needs ${BT_MIN_N}+ results averaging ${BT_MIN_R}R or more; then it trades live in learning mode and is retired if it loses.
 Prefer ideas that are different from what already exists and from what failed. Reply with JSON only: {"ideas":[ ...4 rule sets... ]}`;
 
@@ -111,7 +112,8 @@ export async function runInventor(d: InventorDeps): Promise<{ summary: string; a
         gen.length ? `Invented strategies trading now:\n${gen.map((g) => `- ${g.name}: ${specText(g)}`).join('\n')}` : '',
         state.retired.length ? `Retired after live trading (do not repeat):\n${state.retired.slice(0, 10).map((r) => `- ${r.name}: ${r.rules} -> ${r.why}`).join('\n')}` : '',
         state.tried.length ? `Recently tested (backtest verdicts):\n${state.tried.slice(0, 16).map((t) => `- ${t.name}: ${t.rules} -> ${t.verdict}`).join('\n')}` : '',
-        'Market now: most coins are in a 1h downtrend. Propose 4 new, different rule sets.'
+        `Minimum stop: ${(Math.max(s.minSlPct, s.minSlFloor ?? 0) * 100).toFixed(2)}% of price.`,
+        'Propose 4 new, different rule sets.'
       ].filter(Boolean).join('\n\n');
       try {
         const res = await d.gemini(SYSTEM, prompt, 30_000);
@@ -126,9 +128,11 @@ export async function runInventor(d: InventorDeps): Promise<{ summary: string; a
     }
     // mutations of what works: live winners first, then the best backtests so far
     const parents: GenSpec[] = [...gen.filter((g) => (live[g.id]?.avgR ?? 0) > 0), ...gen];
-    const bestTried = state.tried.filter((t) => t.bt && t.bt.avgR > 0).sort((a, b) => b.bt!.avgR - a.bt!.avgR);
-    for (let k = 0; k < 2 && parents.length; k++) ideas.push({ spec: mutate(parents[Math.floor(rnd() * parents.length)], rnd), by: 'mutation' });
-    if (!ideas.length && !gen.length && !bestTried.length) {
+    // near-misses from earlier backtests are worth building on too (best average R with some trades)
+    const bestTried = state.tried.filter((t) => t.spec && t.bt && t.bt.n >= 10).sort((a, b) => b.bt!.avgR - a.bt!.avgR).slice(0, 3);
+    const pool = [...parents, ...bestTried.map((t) => t.spec!)];
+    for (let k = 0; k < 3 && pool.length; k++) ideas.push({ spec: mutate(pool[Math.floor(rnd() * pool.length)], rnd), by: 'mutation' });
+    if (!ideas.length && !pool.length) {
       // nothing to start from (no Gemini key): seed with a simple, classic pullback idea and mutate it
       const seedSpec = { name: 'Trend pullback RSI', idea: 'Buy dips / sell rallies in a trend when RSI resets and the candle turns back with the trend.', when: 'TREND' as const, withTrend: true, conds: [{ key: 'rsi' as const, op: '<' as const, v: 40 }, { key: 'body' as const, op: '>' as const, v: 0.3 }], stopAtr: 1.5, targetR: 2 };
       ideas.push({ spec: seedSpec, by: 'mutation' }, { spec: mutate(seedSpec, rnd), by: 'mutation' });
@@ -160,7 +164,7 @@ export async function runInventor(d: InventorDeps): Promise<{ summary: string; a
         const ok = btPasses(bt);
         results.push({ spec: idea, bt });
         tested.push({
-          at: now, name: idea.spec.name, rules: specText(idea.spec), by: idea.by, bt,
+          at: now, name: idea.spec.name, rules: specText(idea.spec), by: idea.by, bt, spec: idea.spec,
           verdict: ok ? `passed backtest (${bt.n} results, ${bt.avgR.toFixed(2)}R avg, ${Math.round(bt.winRate * 100)}% win)` : bt.n < BT_MIN_N ? `too few trades in backtest (${bt.n})` : `lost in backtest (${bt.avgR.toFixed(2)}R avg over ${bt.n})`
         });
       }

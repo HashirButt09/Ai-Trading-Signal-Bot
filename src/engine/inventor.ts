@@ -143,7 +143,7 @@ export interface GenHit {
  * Does a rule set fire on candle i? Tries the side(s) the regime allows. Cheap readings are checked
  * first; the heavier ones (Cipher B, SMC, XABC, order flow, levels) only when the cheap ones pass.
  */
-export function genFires(spec: Pick<GenSpec, 'when' | 'withTrend' | 'conds' | 'stopAtr' | 'targetR'>, L: LtfCtx, H: HtfCtx, i: number, regime: Regime, adx: number, symbol: string, step: number): GenHit | null {
+export function genFires(spec: Pick<GenSpec, 'when' | 'withTrend' | 'conds' | 'stopAtr' | 'targetR'>, L: LtfCtx, H: HtfCtx, i: number, regime: Regime, adx: number, symbol: string, step: number, minStopPct = 0): GenHit | null {
   if (regime === 'CHOP') return null;
   if (spec.when === 'TREND' && regime === 'RANGE') return null;
   if (spec.when === 'RANGE' && regime !== 'RANGE') return null;
@@ -160,8 +160,10 @@ export function genFires(spec: Pick<GenSpec, 'when' | 'withTrend' | 'conds' | 's
     if (!cheap.every((k) => test(base[k.key], k))) continue;
     const dir = side === 'LONG' ? 1 : -1;
     const entry = c.c;
-    const sl = entry - dir * spec.stopAtr * a;
-    const tp = entry + dir * spec.targetR * spec.stopAtr * a;
+    // stop in ATR, but never tighter than your minimum stop (tight stops get hunted and fees eat them)
+    const dist = Math.max(spec.stopAtr * a, minStopPct * 1.0001 * entry);
+    const sl = entry - dir * dist;
+    const tp = entry + dir * spec.targetR * dist;
     const heavy = spec.conds.filter((k) => EXTRA_USED.has(k.key));
     if (heavy.length) {
       const ex = extraFeatures(L, H, i, symbol, side, entry, sl, c.t + step);
@@ -203,10 +205,9 @@ export function backtestSpec(
       const hi = htfIndexAt(H, c[i].t + step, hstep);
       const ri = regimeAt(H, hi, s.tune?.regimeAdx ?? 22);
       if (!ri) continue;
-      const hit = genFires(spec, L, H, i, ri.regime, ri.adx, symbol, step);
+      const hit = genFires(spec, L, H, i, ri.regime, ri.adx, symbol, step, Math.max(s.minSlPct, s.minSlFloor ?? 0));
       if (!hit) continue;
       const slPct = Math.abs(hit.entry - hit.sl) / hit.entry;
-      if (slPct < Math.max(s.minSlPct, s.minSlFloor ?? 0)) continue;
       const long = hit.side === 'LONG';
       const risk = Math.abs(hit.entry - hit.sl);
       let r: number | null = null;
@@ -274,6 +275,7 @@ export const genLabel = (k: StrategyId, s?: Partial<Settings> | null) => (isGen(
 // ---------------- inventor state and live records (shared by the server job and the app) ----------------
 
 export interface Tried {
+  spec?: Omit<GenSpec, 'id' | 'since' | 'by' | 'bt'>; // kept for ideas worth building on
   at: number;
   name: string;
   rules: string;

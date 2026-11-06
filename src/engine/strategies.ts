@@ -921,7 +921,7 @@ export function evaluate(
     for (const g of settings.gen ?? []) {
       if (raw) break;
       if (!en[g.id]) continue;
-      const hit = genFires(g, L, H, i, regime, ri.adx, symbol, step);
+      const hit = genFires(g, L, H, i, regime, ri.adx, symbol, step, Math.max(settings.minSlPct, settings.minSlFloor ?? 0));
       if (hit) raw = { strategy: g.id, side: hit.side, entry: hit.entry, sl: hit.sl, tp: hit.tp, trendAligned: hit.trendAligned, gen: g };
     }
   }
