@@ -31,7 +31,8 @@ export async function fetchHistory(symbol: string, interval: string, count: numb
     out = [...chunk, ...out];
     end = chunk[0].t - 1;
     onProgress?.(out.length);
-    if (chunk.length < need) break;
+    // the first page loses its still-forming candle, so one short is normal; much shorter = start of history
+    if (chunk.length < need - 1) break;
   }
   return out.slice(-count);
 }

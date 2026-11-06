@@ -18,7 +18,7 @@ export const REPLAY_DAYS = 90;
 export const REPLAY_PER_STRATEGY = 220; // newest results kept per strategy (keeps the store ~1.5 MB)
 export const REPLAY_REFRESH_MS = 7 * 86_400_000;
 /** bump when the trading rules change in a way that makes older replays outdated: every coin is redone */
-export const REPLAY_VERSION = 2;
+export const REPLAY_VERSION = 3;
 const STATE = (profile: string) => `st:replaystate${profile === MAIN ? '' : `:${profile}`}`;
 
 export interface ReplayState {
